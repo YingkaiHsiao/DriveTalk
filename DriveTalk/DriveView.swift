@@ -56,13 +56,19 @@ struct DriveView: View {
         VStack(spacing: 4) {
             Text(settings.sessionTitle)
                 .font(.headline)
+            if let sub = engine.sessionSubtitle, active {
+                Text(sub)
+                    .font(.subheadline.weight(.semibold))
+                    .multilineTextAlignment(.center)
+                    .lineLimit(2)
+            }
             Text("\(settings.provider.rawValue)・\(settings.level.rawValue)\(settings.feedbackEnabled ? "・即時糾錯" : "")")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
             if let t = engine.lastLatency, active {
                 Text("AI 回應 \(t, specifier: "%.1f") 秒")
                     .font(.caption.monospacedDigit())
-                    .foregroundStyle(t > 4 ? .orange : .secondary)
+                    .foregroundStyle(t > 4 ? Color.orange : Color.secondary)
             }
         }
     }
@@ -142,7 +148,7 @@ struct DriveView: View {
     }
 
     private var voiceCommandHint: some View {
-        Text("請在出發前按下開始，行車中全程用語音。\n語音指令：「repeat」「slow down」「speak faster」「stop practice」")
+        Text("請在出發前按下開始，行車中全程用語音。\n語音指令：「repeat」「slow down」「speak faster」「next news」「stop practice」\n不懂的字直接問：「What does … mean?」")
             .font(.footnote)
             .foregroundStyle(.secondary)
             .multilineTextAlignment(.center)

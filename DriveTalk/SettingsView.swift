@@ -63,7 +63,18 @@ struct SettingsView: View {
                     Picker("模式", selection: $settings.mode) {
                         ForEach(PracticeMode.allCases) { Text($0.rawValue).tag($0) }
                     }
-                    if settings.mode != .free {
+                    if settings.mode == .shadowing {
+                        Picker("跟讀主題", selection: $settings.shadowTopic) {
+                            ForEach(ShadowTopic.allCases) { Text($0.rawValue).tag($0) }
+                        }
+                        Toggle("每句也唸中文意思", isOn: $settings.shadowSayChinese)
+                    }
+                    if settings.mode == .news {
+                        Picker("新聞類別", selection: $settings.newsCategory) {
+                            ForEach(NewsCategory.allCases) { Text($0.rawValue).tag($0) }
+                        }
+                    }
+                    if settings.mode.usesScenario {
                         Picker("情境", selection: $settings.scenarioID) {
                             ForEach(Scenario.scenarios(for: settings.mode)) { Text($0.title).tag($0.id) }
                         }
@@ -75,6 +86,7 @@ struct SettingsView: View {
 
                 Section {
                     Toggle("即時糾錯回饋", isOn: $settings.feedbackEnabled)
+                    Toggle("可以說中文發問（中英雙語辨識）", isOn: $settings.bilingualRecognition)
                     if settings.feedbackEnabled {
                         Picker("回饋說明語言", selection: $settings.feedbackLanguage) {
                             ForEach(FeedbackLanguage.allCases) { Text($0.rawValue).tag($0) }
@@ -83,7 +95,7 @@ struct SettingsView: View {
                 } header: {
                     Text("糾錯")
                 } footer: {
-                    Text("每次你說完，若有明顯的文法或用字問題，AI 會先唸一句更自然的說法，再繼續對話。")
+                    Text("每次你說完，若有明顯的文法或用字問題，AI 會先唸一句更自然的說法，再繼續對話；修正會自動收進「表達方式」。開啟雙語辨識後，可以直接用中文問「這個字什麼意思」，AI 會用中文解釋。")
                 }
 
                 Section {

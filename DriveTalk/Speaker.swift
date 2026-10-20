@@ -90,3 +90,48 @@ extension Speaker: AVSpeechSynthesizerDelegate, AVAudioPlayerDelegate {
         Task { @MainActor in self.done(id) }
     }
 }
+
+/// Tap-to-pronounce for the study screens (word lookup, translation, news, vocab book).
+@MainActor
+final class Pronouncer: ObservableObject {
+    static let shared = Pronouncer()
+    private let speaker = Speaker()
+    private var playTask: Task<Void, Never>?
+    /// Identifier of what is currently being read (to show a stop button).
+    @Published private(set) var speakingID: String?
+
+    private init() {}
+
+    func speak(_ text: String, id: String? = nil, language: String = "en-US", rate: Float = 0.45) {
+        speakSequence([(text, language)], id: id ?? text, rate: rate)
+    }
+
+    /// Speaks several segments in order (e.g. word in English, then meaning in Chinese).
+    func speakSequence(_ segments: [(String, String)], id: String, rate: Float = 0.45) {
+        stop()
+        prepareSession()
+        speakingID = id
+        playTask = Task {
+            for (text, lang) in segments {
+                if Task.isCancelled { break }
+                await speaker.speak(text, language: lang, rate: rate)
+            }
+            if !Task.isCancelled { speakingID = nil }
+        }
+    }
+
+    func stop() {
+        playTask?.cancel()
+        playTask = nil
+        speaker.stop()
+        speakingID = nil
+    }
+
+    private func prepareSession() {
+        let s = AVAudioSession.sharedInstance()
+        // Don't touch the session while a driving practice (playAndRecord) is running.
+        guard !AudioSessionManager.practiceActive else { return }
+        try? s.setCategory(.playback, mode: .spokenAudio, options: [.duckOthers])
+        try? s.setActive(true)
+    }
+}

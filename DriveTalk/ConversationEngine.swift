@@ -36,6 +36,11 @@ final class ConversationEngine: ObservableObject {
     private var lastReply = ""
     private var interrupted = false
     private var observers: [NSObjectProtocol] = []
+    private var pendingArticle: NewsArticle?
+    private var pendingShadowSaved = false
+    private var usedNewsLinks: Set<String> = []
+    /// Title shown on screen for the current session (e.g. the news headline).
+    @Published private(set) var sessionSubtitle: String?
 
     var isRunning: Bool { loopTask != nil }
 
@@ -49,9 +54,13 @@ final class ConversationEngine: ObservableObject {
 
     // MARK: Public controls
 
-    func start(settings: SettingsStore) {
+    /// - Parameter article: start a news-discussion session about this article (from the 新聞 tab).
+    /// - Parameter shadowSaved: start a shadowing session using only the saved expressions.
+    func start(settings: SettingsStore, article: NewsArticle? = nil, shadowSaved: Bool = false) {
         guard loopTask == nil else { return }
         errorText = nil
+        pendingArticle = article
+        pendingShadowSaved = shadowSaved
         loopTask = Task { [weak self] in
             await self?.run(settings: settings)
         }
@@ -86,23 +95,75 @@ final class ConversationEngine: ObservableObject {
             return
         }
         UIApplication.shared.isIdleTimerDisabled = true
+        let startedAt = Date()
+        defer { ProgressStore.shared.addPractice(seconds: Date().timeIntervalSince(startedAt)) }
 
         messages = []
         llmHistory = []
         lastReply = ""
-        let system = PromptBuilder.system(mode: s.mode, scenario: s.scenario, level: s.level,
-                                          feedback: s.feedbackEnabled, feedbackLanguage: s.feedbackLanguage)
-        let service = LLMService(provider: s.provider, apiKey: s.activeKey, model: s.activeModel)
+        sessionSubtitle = nil
+        let service = s.makeService()
+        let shadowSaved = pendingShadowSaved
+        let mode: PracticeMode = pendingArticle != nil ? .news : (shadowSaved ? .shadowing : s.mode)
+        var article = pendingArticle
+        pendingArticle = nil
+        pendingShadowSaved = false
+        recognizer.bilingual = s.bilingualRecognition && mode != .shadowing
+
+        if mode == .shadowing {
+            await runShadowing(settings: s, savedOnly: shadowSaved || s.shadowTopic == .saved)
+            let attempts = messages.filter { $0.role == .user }.count
+            if attempts > 0 {
+                let t = ProgressStore.shared.today
+                let avg = t.shadowCount == 0 ? 0 : t.shadowScoreSum / t.shadowCount
+                let record = SessionRecord(date: Date(), title: shadowSaved ? "跟讀練習・我的表達方式" : s.sessionTitle,
+                                           summary: "跟讀 \(attempts) 次。今日累計跟讀 \(t.shadowCount) 句，平均 \(avg) 分。\n\n每次跟讀的分數與漏掉的字請看「完整對話」。",
+                                           turns: attempts, transcript: messages)
+                history.add(record)
+                finishedSession = record
+            }
+            return
+        }
+        var reviewWords: [VocabEntry] = []
+        var reviewExprs: [SavedExpression] = []
+
+        switch mode {
+        case .news:
+            if article == nil {
+                await say("Let me get today's \(s.newsCategory == .technology ? "tech " : "")news for you.", settings: s)
+                article = await loadNextArticle(settings: s)
+                if article == nil {
+                    await say("Sorry, I couldn't get the news right now. Let's try again later.", settings: s)
+                    return
+                }
+            }
+            if let a = article { await readArticle(a, settings: s) }
+        case .vocabReview:
+            reviewWords = VocabStore.shared.reviewBatch(limit: 10)
+            reviewExprs = Array(ProgressStore.shared.dueExpressions.prefix(5))
+            if reviewWords.isEmpty && reviewExprs.isEmpty {
+                errorText = "生字本和表達方式都還是空的：先查單字、讀新聞或開啟糾錯練習對話"
+                await say("There's nothing to review yet. Save some words first, then come back.", settings: s)
+                return
+            }
+            sessionSubtitle = "智慧複習：\(reviewWords.count) 個單字、\(reviewExprs.count) 個表達"
+        default:
+            break
+        }
+        if Task.isCancelled { return }
+
+        func makeSystem() -> String {
+            PromptBuilder.system(mode: mode, scenario: s.scenario, level: s.level,
+                                 feedback: s.feedbackEnabled, feedbackLanguage: s.feedbackLanguage,
+                                 article: article, reviewWords: reviewWords, reviewExpressions: reviewExprs)
+        }
+        var system = makeSystem()
 
         // Opening line from the AI
         _ = await assistantTurn(userText: PromptBuilder.startToken, system: system, service: service, settings: s)
 
         conversation: while !Task.isCancelled {
-            // Wait while a phone call / Siri etc. holds the audio.
-            while interrupted && !Task.isCancelled {
-                phase = .paused
-                try? await Task.sleep(for: .milliseconds(500))
-            }
+            await waitIfInterrupted()
             if Task.isCancelled { break }
 
             phase = .listening
@@ -136,16 +197,31 @@ final class ConversationEngine: ObservableObject {
                 s.speechRate = min(0.6, s.speechRate + 0.05)
                 await say("Okay, I'll speak a bit faster.", settings: s)
                 continue
-            case .normal:
+            case .nextNews:
+                guard mode == .news else { break }
+                await say("Okay, here's the next story.", settings: s)
+                guard let next = await loadNextArticle(settings: s) else {
+                    await say("Sorry, I couldn't get another story.", settings: s)
+                    continue
+                }
+                article = next
+                system = makeSystem()
+                llmHistory = []
+                await readArticle(next, settings: s)
+                _ = await assistantTurn(userText: PromptBuilder.startToken, system: system, service: service, settings: s)
+                continue
+            case .skip, .normal:
                 break
             }
 
             messages.append(ChatMessage(role: .user, text: heard))
+            ProgressStore.shared.recordUtterance(heard)
             let ok = await assistantTurn(userText: heard, system: system, service: service, settings: s)
             if !ok {
                 messages.removeLast()
             }
         }
+
 
         // Session summary
         let userTurns = messages.filter { $0.role == .user }.count
@@ -169,23 +245,33 @@ final class ConversationEngine: ObservableObject {
         trimHistory()
         do {
             let t0 = Date()
-            let raw = try await service.complete(system: system, messages: llmHistory, maxTokens: 350, json: s.feedbackEnabled)
+            let raw = try await service.complete(system: system, messages: llmHistory, maxTokens: 400, json: true)
             lastLatency = Date().timeIntervalSince(t0)
             if Task.isCancelled { llmHistory.removeLast(); return false }
-            let parsed = PromptBuilder.parse(raw, expectJSON: s.feedbackEnabled)
+            let parsed = PromptBuilder.parse(raw)
+            for w in parsed.vocab { VocabStore.shared.add(w, source: "對話") }
+            applyGrades(parsed.graded)
             llmHistory.append(LLMMessage(role: "assistant", content: raw))
 
             if !parsed.feedback.isEmpty, let i = messages.lastIndex(where: { $0.role == .user }) {
                 messages[i].feedback = parsed.feedback
+                if !parsed.better.isEmpty {
+                    ProgressStore.shared.addExpression(original: messages[i].text, better: parsed.better,
+                                                       note: parsed.feedback, source: "對話糾錯")
+                }
             }
-            messages.append(ChatMessage(role: .assistant, text: parsed.reply))
-            lastReply = parsed.reply
+            let shown = [parsed.explainZh, parsed.reply].filter { !$0.isEmpty }.joined(separator: "\n")
+            messages.append(ChatMessage(role: .assistant, text: shown))
+            lastReply = parsed.reply.isEmpty ? parsed.explainZh : parsed.reply
 
             if !parsed.feedback.isEmpty {
                 let lang = s.feedbackLanguage == .chinese ? "zh-TW" : "en-US"
                 await say(parsed.feedback, language: lang, settings: s)
             }
-            if Task.isCancelled { return true }
+            if !parsed.explainZh.isEmpty, !Task.isCancelled {
+                await say(parsed.explainZh, language: "zh-TW", settings: s)
+            }
+            if Task.isCancelled || parsed.reply.isEmpty { return true }
             await say(parsed.reply, settings: s)
             return true
         } catch {
@@ -198,7 +284,160 @@ final class ConversationEngine: ObservableObject {
         }
     }
 
-    private func say(_ text: String, language: String = "en-US", settings s: SettingsStore) async {
+    /// Smart review: update the spaced-repetition schedule from the AI's grading.
+    private func applyGrades(_ graded: [(item: String, correct: Bool)]) {
+        for g in graded {
+            let key = g.item.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+            if VocabStore.shared.contains(key) {
+                VocabStore.shared.grade(word: key, g.correct ? .good : .again)
+            } else if let e = ProgressStore.shared.expressions.first(where: {
+                $0.better.lowercased().trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters))
+                    == key.trimmingCharacters(in: .punctuationCharacters)
+            }) {
+                ProgressStore.shared.gradeExpression(e.id, g.correct ? .good : .again)
+            }
+        }
+    }
+
+    private func waitIfInterrupted() async {
+        // Wait while a phone call / Siri etc. holds the audio.
+        while interrupted && !Task.isCancelled {
+            phase = .paused
+            try? await Task.sleep(for: .milliseconds(500))
+        }
+    }
+
+    // MARK: Shadowing (跟讀) — scored locally, almost no tokens
+
+    private func runShadowing(settings s: SettingsStore, savedOnly: Bool) async {
+        var first = true
+        while !Task.isCancelled {
+            var items: [(en: String, zh: String, exprID: UUID?)] = []
+            let saved = ProgressStore.shared.expressionsForPractice(limit: savedOnly ? 10 : 3)
+            items += saved.map { (en: $0.better, zh: "", exprID: UUID?.some($0.id)) }
+            if !savedOnly {
+                phase = .thinking
+                do {
+                    let gen = try await StudyService(settings: s).shadowSentences(topic: s.shadowTopic, level: s.level, count: 8)
+                    items += gen.map { (en: $0.en, zh: $0.zh, exprID: UUID?.none) }
+                } catch {
+                    errorText = error.localizedDescription
+                }
+            }
+            if Task.isCancelled { return }
+            if items.isEmpty {
+                if savedOnly {
+                    errorText = "還沒有存下的表達方式：開啟即時糾錯練習對話，或用「查詢 > 文法修正」收集"
+                    await say("You don't have any saved expressions yet.", settings: s)
+                } else {
+                    await say("Sorry, I couldn't prepare sentences. Please check the connection.", settings: s)
+                }
+                return
+            }
+            if first {
+                await say("Let's do shadowing. Listen, then repeat after me. Say next to skip a sentence.", settings: s)
+                first = false
+            }
+
+            for item in items {
+                if Task.isCancelled { return }
+                sessionSubtitle = item.en
+                messages.append(ChatMessage(role: .assistant, text: item.zh.isEmpty ? item.en : "\(item.en)\n\(item.zh)"))
+                lastReply = item.en
+                var best = 0
+                var attempt = 0
+                sentence: while attempt < 3 && !Task.isCancelled {
+                    attempt += 1
+                    await waitIfInterrupted()
+                    await say(item.en, settings: s, rateScale: 0.9)
+                    if attempt == 1, s.shadowSayChinese, !item.zh.isEmpty {
+                        await say(item.zh, language: "zh-TW", settings: s)
+                    }
+                    if Task.isCancelled { return }
+                    phase = .listening
+                    recognizer.silenceTimeout = s.silenceTimeout
+                    let heard = await recognizer.listen()
+                    if Task.isCancelled { return }
+                    if heard.isEmpty { continue }   // silence: play it again
+
+                    switch VoiceCommand(heard) {
+                    case .end:
+                        await say("Okay, great practice today!", settings: s)
+                        return
+                    case .skip, .nextNews:
+                        break sentence
+                    case .repeatLast:
+                        attempt -= 1
+                        continue
+                    case .slower:
+                        s.speechRate = max(0.35, s.speechRate - 0.05)
+                        attempt -= 1
+                        continue
+                    case .faster:
+                        s.speechRate = min(0.6, s.speechRate + 0.05)
+                        attempt -= 1
+                        continue
+                    case .normal:
+                        break
+                    }
+
+                    ProgressStore.shared.recordUtterance(heard)
+                    let result = ShadowScorer.score(target: item.en, heard: heard)
+                    best = max(best, result.score)
+                    var user = ChatMessage(role: .user, text: heard)
+                    user.feedback = "跟讀分數 \(result.score)" + (result.missed.isEmpty ? "" : "・沒聽到：" + result.missed.joined(separator: ", "))
+                    messages.append(user)
+
+                    if result.score >= 85 {
+                        await say(result.score >= 98 ? "Perfect!" : ["Great!", "Nice job!", "Very good!"].randomElement()!, settings: s)
+                        break sentence
+                    } else if attempt < 3 {
+                        let hint = result.missed.prefix(3).joined(separator: ", ")
+                        await say(hint.isEmpty ? "Almost! One more time." : "Almost! Listen for: \(hint). Again.", settings: s)
+                    } else {
+                        await say("Good try. Let's move on.", settings: s)
+                    }
+                }
+                if best > 0 { ProgressStore.shared.recordShadow(score: best) }
+                if let id = item.exprID { ProgressStore.shared.markPracticed(id) }
+            }
+            if Task.isCancelled { return }
+            await say(savedOnly ? "That's all your saved expressions. Let's go through them again." : "Nice work! Here come more sentences.", settings: s)
+        }
+    }
+
+    // MARK: News helpers
+
+    private func loadNextArticle(settings s: SettingsStore) async -> NewsArticle? {
+        phase = .thinking
+        let store = NewsStore.shared
+        if store.items.isEmpty || store.loadedCategory != s.newsCategory {
+            await store.refresh(s.newsCategory)
+        }
+        guard let item = store.nextItem(after: usedNewsLinks) else {
+            errorText = store.errorText ?? "目前沒有新聞"
+            return nil
+        }
+        usedNewsLinks.insert(item.link)
+        do {
+            return try await store.article(for: item, settings: s)
+        } catch {
+            errorText = error.localizedDescription
+            return nil
+        }
+    }
+
+    private func readArticle(_ a: NewsArticle, settings s: SettingsStore) async {
+        sessionSubtitle = a.title
+        messages.append(ChatMessage(role: .assistant, text: "📰 " + a.fullText))
+        await say(a.title, settings: s)
+        for para in a.paragraphs {
+            if Task.isCancelled { return }
+            await say(para, settings: s)
+        }
+    }
+
+    private func say(_ text: String, language: String = "en-US", settings s: SettingsStore, rateScale: Double = 1) async {
         guard !Task.isCancelled else { return }
         phase = .speaking
         if s.useOpenAITTS, !s.openAIKey.isEmpty,
@@ -209,7 +448,7 @@ final class ConversationEngine: ObservableObject {
             return
         }
         guard !Task.isCancelled else { return }
-        await speaker.speak(text, language: language, rate: Float(s.speechRate))
+        await speaker.speak(text, language: language, rate: Float(s.speechRate * rateScale))
     }
 
     /// Keep the context small (fast + cheap). Must start with a user message for Claude.
@@ -253,7 +492,7 @@ final class ConversationEngine: ObservableObject {
 // MARK: - Voice commands (hands-free control)
 
 enum VoiceCommand {
-    case end, repeatLast, slower, faster, normal
+    case end, repeatLast, slower, faster, nextNews, skip, normal
 
     init(_ text: String) {
         let t = text.lowercased()
@@ -269,6 +508,11 @@ enum VoiceCommand {
             self = .slower
         } else if words <= 5 && (t.contains("speak faster") || t.contains("speed up")) {
             self = .faster
+        } else if words <= 5 && (t.contains("next news") || t.contains("next story") || t.contains("another story")) {
+            self = .nextNews
+        } else if words <= 3 && (t == "next" || t == "skip" || t.contains("next one") || t.contains("next sentence")
+                                 || t.contains("skip it") || t.contains("skip this")) {
+            self = .skip
         } else {
             self = .normal
         }
@@ -277,16 +521,22 @@ enum VoiceCommand {
 
 // MARK: - Audio session
 
+@MainActor
 enum AudioSessionManager {
+    /// True while a driving practice session owns the audio session.
+    private(set) static var practiceActive = false
+
     static func activate() throws {
         let s = AVAudioSession.sharedInstance()
         // .allowBluetooth = HFP, so the car's hands-free microphone can be used.
         try s.setCategory(.playAndRecord, mode: .default,
                           options: [.allowBluetooth, .allowBluetoothA2DP, .defaultToSpeaker, .duckOthers])
         try s.setActive(true)
+        practiceActive = true
     }
 
     static func deactivate() {
+        practiceActive = false
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     }
 }

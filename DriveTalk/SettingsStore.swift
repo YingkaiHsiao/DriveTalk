@@ -48,6 +48,12 @@ final class SettingsStore: ObservableObject {
 
     @Published var mode: PracticeMode { didSet { d.set(mode.rawValue, forKey: "mode"); fixScenario() } }
     @Published var scenarioID: String { didSet { d.set(scenarioID, forKey: "scenarioID") } }
+    @Published var newsCategory: NewsCategory { didSet { d.set(newsCategory.rawValue, forKey: "newsCategory") } }
+    /// Recognize English AND 中文 at the same time (ask questions in Chinese).
+    @Published var bilingualRecognition: Bool { didSet { d.set(bilingualRecognition, forKey: "bilingualRecognition") } }
+    @Published var shadowTopic: ShadowTopic { didSet { d.set(shadowTopic.rawValue, forKey: "shadowTopic") } }
+    /// In shadowing, also read the Chinese meaning of each sentence.
+    @Published var shadowSayChinese: Bool { didSet { d.set(shadowSayChinese, forKey: "shadowSayChinese") } }
     @Published var level: EnglishLevel { didSet { d.set(level.rawValue, forKey: "level") } }
     @Published var feedbackEnabled: Bool { didSet { d.set(feedbackEnabled, forKey: "feedbackEnabled") } }
     @Published var feedbackLanguage: FeedbackLanguage { didSet { d.set(feedbackLanguage.rawValue, forKey: "feedbackLanguage") } }
@@ -71,6 +77,10 @@ final class SettingsStore: ObservableObject {
         geminiModel = d.string(forKey: "geminiModel") ?? "gemini-3.5-flash-lite"
         mode = PracticeMode(rawValue: d.string(forKey: "mode") ?? "") ?? .free
         scenarioID = d.string(forKey: "scenarioID") ?? "fae_boot"
+        newsCategory = NewsCategory(rawValue: d.string(forKey: "newsCategory") ?? "") ?? .technology
+        bilingualRecognition = d.object(forKey: "bilingualRecognition") as? Bool ?? true
+        shadowTopic = ShadowTopic(rawValue: d.string(forKey: "shadowTopic") ?? "") ?? .work
+        shadowSayChinese = d.object(forKey: "shadowSayChinese") as? Bool ?? true
         level = EnglishLevel(rawValue: d.string(forKey: "level") ?? "") ?? .intermediate
         feedbackEnabled = d.object(forKey: "feedbackEnabled") as? Bool ?? true
         feedbackLanguage = FeedbackLanguage(rawValue: d.string(forKey: "feedbackLanguage") ?? "") ?? .english
@@ -90,7 +100,7 @@ final class SettingsStore: ObservableObject {
 
     /// nil in free-conversation mode.
     var scenario: Scenario? {
-        guard mode != .free else { return nil }
+        guard mode.usesScenario else { return nil }
         return Scenario.all.first { $0.id == scenarioID }
     }
 
@@ -112,6 +122,8 @@ final class SettingsStore: ObservableObject {
 
     var sessionTitle: String {
         if let s = scenario { return "\(mode.rawValue)・\(s.title)" }
+        if mode == .news { return "\(mode.rawValue)・\(newsCategory.rawValue)" }
+        if mode == .shadowing { return "\(mode.rawValue)・\(shadowTopic.rawValue)" }
         return mode.rawValue
     }
 

@@ -11,7 +11,12 @@ enum PracticeMode: String, CaseIterable, Identifiable, Codable {
     case free = "自由對話"
     case rolePlay = "情境角色扮演"
     case workTech = "工作英文（技術/嵌入式）"
+    case news = "新聞聽讀討論"
+    case vocabReview = "智慧複習（生字＋表達）"
+    case shadowing = "跟讀練習（跟著唸）"
     var id: String { rawValue }
+
+    var usesScenario: Bool { self == .rolePlay || self == .workTech }
 }
 
 enum EnglishLevel: String, CaseIterable, Identifiable, Codable {
@@ -25,6 +30,23 @@ enum EnglishLevel: String, CaseIterable, Identifiable, Codable {
         case .beginner: return "CEFR A2. Use simple, common words and short sentences. Speak slowly and clearly."
         case .intermediate: return "CEFR B1-B2. Use natural everyday English with some useful idioms, but avoid rare words."
         case .advanced: return "CEFR C1. Use natural, fluent English including idioms and nuanced vocabulary."
+        }
+    }
+}
+
+enum ShadowTopic: String, CaseIterable, Identifiable, Codable {
+    case work = "工作英文（技術/會議）"
+    case daily = "日常生活"
+    case travel = "出差旅遊"
+    case saved = "只用我的表達方式"
+    var id: String { rawValue }
+
+    var prompt: String {
+        switch self {
+        case .work: return "workplace English for an embedded Linux BSP engineer: meetings, status updates, customer support calls, emails read aloud, technical explanations"
+        case .daily: return "everyday conversation: small talk, food, family, weekends, shopping, feelings"
+        case .travel: return "business travel: airport, hotel, taxi, restaurant, trade shows, meeting overseas colleagues"
+        case .saved: return "everyday and workplace English"
         }
     }
 }
