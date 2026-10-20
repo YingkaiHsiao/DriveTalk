@@ -3,6 +3,7 @@ import Foundation
 enum AIProvider: String, CaseIterable, Identifiable, Codable {
     case openAI = "OpenAI"
     case claude = "Claude"
+    case gemini = "Gemini"
     var id: String { rawValue }
 }
 

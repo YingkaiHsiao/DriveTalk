@@ -22,13 +22,23 @@ struct SettingsView: View {
                         TextField("模型", text: $settings.openAIModel)
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
-                    } else {
+                    } else if settings.provider == .claude {
                         SecureField("Anthropic API Key (sk-ant-...)", text: $settings.claudeKey)
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
                         TextField("模型", text: $settings.claudeModel)
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
+                    } else {
+                        SecureField("Gemini API Key (AIza...)", text: $settings.geminiKey)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                        TextField("模型", text: $settings.geminiModel)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                        Text("免費 Key：aistudio.google.com → Get API key。免費方案有每日次數限制，建議用 Flash-Lite 模型；免費方案的對話可能被 Google 用於改進模型，請勿說公司機密。")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
                     }
 
                     Button {
@@ -46,7 +56,7 @@ struct SettingsView: View {
                 } header: {
                     Text("AI 綁定")
                 } footer: {
-                    Text("API Key 只存在本機 iOS 鑰匙圈，直接連到 OpenAI / Anthropic，不經過其他伺服器。開車對話建議用速度快的小模型。")
+                    Text("API Key 只存在本機 iOS 鑰匙圈，直接連到 OpenAI / Anthropic / Google，不經過其他伺服器。開車對話建議用速度快的小模型。")
                 }
 
                 Section("練習內容") {
@@ -121,7 +131,7 @@ struct SettingsView: View {
         let service = LLMService(provider: settings.provider, apiKey: settings.activeKey, model: settings.activeModel)
         do {
             let r = try await service.complete(system: "Reply with exactly: Ready to practice!",
-                                               messages: [LLMMessage(role: "user", content: "Hi")], maxTokens: 20)
+                                               messages: [LLMMessage(role: "user", content: "Hi")], maxTokens: 200)
             testResult = "✅ 連線成功：\(r)"
         } catch {
             testResult = "❌ \(error.localizedDescription)"

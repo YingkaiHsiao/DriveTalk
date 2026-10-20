@@ -8,7 +8,9 @@ enum LLMError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .missingKey: return "尚未設定 API Key"
-        case .http(let code, let body): return "API 錯誤 \(code)：\(body.prefix(300))"
+        case .http(let code, let body):
+            let hint = code == 429 ? "\n（用量超過限制：免費方案每分鐘/每天次數有限，請稍後再試或改用其他模型）" : ""
+            return "API 錯誤 \(code)：\(body.prefix(500))\(hint)"
         case .badResponse: return "無法解析 API 回應"
         }
     }
@@ -33,6 +35,7 @@ struct LLMService {
         switch provider {
         case .openAI: return try await openAI(key: key, system: system, messages: messages, maxTokens: maxTokens, json: json)
         case .claude: return try await claude(key: key, system: system, messages: messages, maxTokens: maxTokens)
+        case .gemini: return try await gemini(key: key, system: system, messages: messages, maxTokens: maxTokens, json: json)
         }
     }
 
@@ -89,6 +92,48 @@ struct LLMService {
         return text
     }
 
+    // MARK: Gemini (generateContent REST API)
+
+    private func gemini(key: String, system: String, messages: [LLMMessage], maxTokens: Int, json: Bool) async throws -> String {
+        let name = model.trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "models/", with: "")
+        guard let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(name):generateContent") else {
+            throw LLMError.badResponse
+        }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue(key, forHTTPHeaderField: "x-goog-api-key")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        // Gemini uses "model" instead of "assistant"; the last turn must be a user turn.
+        let contents: [[String: Any]] = messages.map {
+            ["role": $0.role == "assistant" ? "model" : "user", "parts": [["text": $0.content]]]
+        }
+        // Thinking tokens count toward maxOutputTokens on Gemini 3.x, so leave headroom.
+        var generationConfig: [String: Any] = ["maxOutputTokens": max(maxTokens * 4, 1024)]
+        if json { generationConfig["responseMimeType"] = "application/json" }
+
+        let body: [String: Any] = [
+            "systemInstruction": ["parts": [["text": system]]],
+            "contents": contents,
+            "generationConfig": generationConfig,
+        ]
+        req.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let (data, resp) = try await Self.session.data(for: req)
+        try Self.check(resp, data)
+        guard let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let candidates = obj["candidates"] as? [[String: Any]],
+              let content = candidates.first?["content"] as? [String: Any],
+              let parts = content["parts"] as? [[String: Any]] else { throw LLMError.badResponse }
+        let text = parts
+            .filter { ($0["thought"] as? Bool) != true }
+            .compactMap { $0["text"] as? String }
+            .joined()
+        guard !text.isEmpty else { throw LLMError.badResponse }
+        return text
+    }
+
     // MARK: OpenAI text-to-speech (optional, nicer voice)
 
     static func openAISpeech(key: String, text: String, voice: String, speed: Double) async throws -> Data {
@@ -112,7 +157,15 @@ struct LLMService {
     private static func check(_ resp: URLResponse, _ data: Data) throws {
         guard let http = resp as? HTTPURLResponse else { throw LLMError.badResponse }
         guard (200..<300).contains(http.statusCode) else {
-            throw LLMError.http(http.statusCode, String(data: data, encoding: .utf8) ?? "")
+            // Both OpenAI and Anthropic return {"error": {"type"/"code": ..., "message": ...}}
+            var detail = String(data: data, encoding: .utf8) ?? ""
+            if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let err = obj["error"] as? [String: Any] {
+                let kind = (err["type"] as? String) ?? (err["status"] as? String) ?? (err["code"] as? String) ?? ""
+                let msg = (err["message"] as? String) ?? ""
+                detail = kind.isEmpty ? msg : "[\(kind)] \(msg)"
+            }
+            throw LLMError.http(http.statusCode, detail)
         }
     }
 }

@@ -43,6 +43,8 @@ final class SettingsStore: ObservableObject {
     @Published var claudeKey: String { didSet { KeychainHelper.save(claudeKey.trimmingCharacters(in: .whitespacesAndNewlines), for: "claude") } }
     @Published var openAIModel: String { didSet { d.set(openAIModel, forKey: "openAIModel") } }
     @Published var claudeModel: String { didSet { d.set(claudeModel, forKey: "claudeModel") } }
+    @Published var geminiKey: String { didSet { KeychainHelper.save(geminiKey.trimmingCharacters(in: .whitespacesAndNewlines), for: "gemini") } }
+    @Published var geminiModel: String { didSet { d.set(geminiModel, forKey: "geminiModel") } }
 
     @Published var mode: PracticeMode { didSet { d.set(mode.rawValue, forKey: "mode"); fixScenario() } }
     @Published var scenarioID: String { didSet { d.set(scenarioID, forKey: "scenarioID") } }
@@ -65,6 +67,8 @@ final class SettingsStore: ObservableObject {
         claudeKey = KeychainHelper.load("claude")
         openAIModel = d.string(forKey: "openAIModel") ?? "gpt-4.1-mini"
         claudeModel = d.string(forKey: "claudeModel") ?? "claude-haiku-4-5"
+        geminiKey = KeychainHelper.load("gemini")
+        geminiModel = d.string(forKey: "geminiModel") ?? "gemini-3.5-flash-lite"
         mode = PracticeMode(rawValue: d.string(forKey: "mode") ?? "") ?? .free
         scenarioID = d.string(forKey: "scenarioID") ?? "fae_boot"
         level = EnglishLevel(rawValue: d.string(forKey: "level") ?? "") ?? .intermediate
@@ -90,8 +94,21 @@ final class SettingsStore: ObservableObject {
         return Scenario.all.first { $0.id == scenarioID }
     }
 
-    var activeKey: String { provider == .openAI ? openAIKey : claudeKey }
-    var activeModel: String { provider == .openAI ? openAIModel : claudeModel }
+    var activeKey: String {
+        switch provider {
+        case .openAI: return openAIKey
+        case .claude: return claudeKey
+        case .gemini: return geminiKey
+        }
+    }
+
+    var activeModel: String {
+        switch provider {
+        case .openAI: return openAIModel
+        case .claude: return claudeModel
+        case .gemini: return geminiModel
+        }
+    }
 
     var sessionTitle: String {
         if let s = scenario { return "\(mode.rawValue)・\(s.title)" }

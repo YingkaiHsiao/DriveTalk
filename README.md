@@ -4,7 +4,7 @@
 
 ## 功能
 
-- **AI 綁定**：OpenAI（預設 `gpt-4.1-mini`）或 Claude（預設 `claude-haiku-4-5`），模型名稱可在設定中自由修改。API Key 存在 iOS 鑰匙圈。
+- **AI 綁定**：OpenAI（預設 `gpt-4.1-mini`）、Claude（預設 `claude-haiku-4-5`）或 Google Gemini（預設 `gemini-3.5-flash-lite`，有免費方案），模型名稱可在設定中自由修改。API Key 存在 iOS 鑰匙圈。
 - **四種練習**：自由對話、情境角色扮演（餐廳／飯店／機場／面試／閒聊）、工作英文（客戶 FAE 開機除錯、站會報告、Kernel CVE 說明、晶片廠 Wi-Fi 驅動問題、時程協商、展會介紹、設計審查）。
 - **即時糾錯**：你說完後，AI 先唸一句 `Better: "..."` 的更自然說法（可選英文或繁中說明），再接著對話。
 - **免動手**：偵測停頓自動結束你的發言；語音指令 `repeat`、`slow down`、`speak faster`、`stop practice`。
@@ -69,6 +69,7 @@
 1. 右上角 ⚙️ 設定 → 選 OpenAI 或 Claude → 貼上 API Key → 「測試連線」。
    - OpenAI Key：https://platform.openai.com/api-keys
    - Claude Key：https://console.anthropic.com/settings/keys
+   - Gemini Key（免費）：https://aistudio.google.com → **Get API key** → Create API key
 2. 選練習模式、情境、程度，是否開啟即時糾錯。
 3. 建議到 iOS **設定 > 輔助使用 > 語音內容 > 聲音 > English** 下載 Premium/Enhanced 語音，內建語音會自然很多。
 4. **出發前**按「開始練習」並允許麥克風、語音辨識權限，接著放好手機開車。全程只用語音，不需看螢幕。
@@ -83,6 +84,13 @@
 
 每回合送出約數百～兩千 tokens（保留最近 30 則對話），用小模型時，30 分鐘練習通常只要幾美分；開啟 OpenAI TTS 另計語音費用。
 
+## Gemini 免費方案說明
+
+- 不需要綁信用卡，在 Google AI Studio 用 Google 帳號建立 API Key 即可。
+- 免費方案有每分鐘與每日請求次數限制（以 AI Studio 專案頁面顯示為準）。每一輪對話算 1 次請求，Flash-Lite 系列額度通常比 Flash 多，較適合長時間練習。
+- 超過額度會出現「API 錯誤 429」，等額度重置（太平洋時間午夜，約台灣下午 3～4 點）或改用其他模型。
+- 免費方案的輸入與回應可能被 Google 用來改進模型並由人員審閱，練習時請勿提到公司機密。
+
 ## 程式結構
 
 | 檔案 | 說明 |
@@ -94,7 +102,7 @@
 | `ConversationEngine.swift` | 對話主迴圈、語音指令、音訊中斷處理、AudioSession、紀錄儲存 |
 | `SpeechRecognizer.swift` | Apple Speech 英文辨識（裝置端優先）、停頓偵測 |
 | `Speaker.swift` | 語音播放（內建 TTS / OpenAI TTS 音檔） |
-| `LLMService.swift` | OpenAI Chat Completions、Anthropic Messages、OpenAI TTS API |
+| `LLMService.swift` | OpenAI Chat Completions、Anthropic Messages、Gemini generateContent、OpenAI TTS API |
 | `PromptBuilder.swift` | System prompt（角色、程度、糾錯 JSON 格式）、摘要 prompt |
 | `Models.swift` | 模式、情境清單、資料模型 |
 
