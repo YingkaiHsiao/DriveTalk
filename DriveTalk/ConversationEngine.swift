@@ -24,6 +24,8 @@ final class ConversationEngine: ObservableObject {
     @Published private(set) var messages: [ChatMessage] = []
     @Published private(set) var errorText: String?
     @Published var finishedSession: SessionRecord?
+    /// Seconds the AI took for the last reply (shown on screen to help pick a faster model).
+    @Published private(set) var lastLatency: Double?
 
     let recognizer = SpeechRecognizer()
     let speaker = Speaker()
@@ -166,7 +168,9 @@ final class ConversationEngine: ObservableObject {
         llmHistory.append(LLMMessage(role: "user", content: userText))
         trimHistory()
         do {
+            let t0 = Date()
             let raw = try await service.complete(system: system, messages: llmHistory, maxTokens: 350, json: s.feedbackEnabled)
+            lastLatency = Date().timeIntervalSince(t0)
             if Task.isCancelled { llmHistory.removeLast(); return false }
             let parsed = PromptBuilder.parse(raw, expectJSON: s.feedbackEnabled)
             llmHistory.append(LLMMessage(role: "assistant", content: raw))

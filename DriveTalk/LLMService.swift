@@ -94,9 +94,41 @@ struct LLMService {
 
     // MARK: Gemini (generateContent REST API)
 
+    enum GeminiThinking: Sendable {
+        case level(String)   // Gemini 3.x / 4: "minimal" | "low" | "medium" | "high"
+        case budget(Int)     // Gemini 2.5: 0 disables thinking (Flash)
+    }
+
+    /// Pick the lowest-latency thinking setting the model supports.
+    static func geminiThinking(for model: String) -> GeminiThinking? {
+        let m = model.lowercased()
+        if m.contains("2.5") {
+            if m.contains("flash-lite") { return nil }      // doesn't think by default
+            if m.contains("flash") { return .budget(0) }
+            return nil                                       // 2.5 Pro can't disable thinking
+        }
+        if m.contains("flash-lite") || m.contains("3.6-flash") || m.contains("3.5-flash") {
+            return .level("minimal")
+        }
+        return .level("low")                                 // e.g. 3.8 Flash / Gemini 4 don't accept "minimal"
+    }
+
     private func gemini(key: String, system: String, messages: [LLMMessage], maxTokens: Int, json: Bool) async throws -> String {
         let name = model.trimmingCharacters(in: .whitespacesAndNewlines)
             .replacingOccurrences(of: "models/", with: "")
+        let thinking = Self.geminiThinking(for: name)
+        do {
+            return try await Self.geminiOnce(key: key, model: name, system: system, messages: messages,
+                                             maxTokens: maxTokens, json: json, thinking: thinking)
+        } catch LLMError.http(400, let body) where thinking != nil && body.lowercased().contains("think") {
+            // Model rejected our thinking setting — retry with the model's default.
+            return try await Self.geminiOnce(key: key, model: name, system: system, messages: messages,
+                                             maxTokens: maxTokens, json: json, thinking: nil)
+        }
+    }
+
+    private static func geminiOnce(key: String, model name: String, system: String, messages: [LLMMessage],
+                                   maxTokens: Int, json: Bool, thinking: GeminiThinking?) async throws -> String {
         guard let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(name):generateContent") else {
             throw LLMError.badResponse
         }
@@ -109,9 +141,14 @@ struct LLMService {
         let contents: [[String: Any]] = messages.map {
             ["role": $0.role == "assistant" ? "model" : "user", "parts": [["text": $0.content]]]
         }
-        // Thinking tokens count toward maxOutputTokens on Gemini 3.x, so leave headroom.
+        // Thinking tokens count toward maxOutputTokens, so leave headroom.
         var generationConfig: [String: Any] = ["maxOutputTokens": max(maxTokens * 4, 1024)]
         if json { generationConfig["responseMimeType"] = "application/json" }
+        switch thinking {
+        case .level(let l): generationConfig["thinkingConfig"] = ["thinkingLevel": l]
+        case .budget(let b): generationConfig["thinkingConfig"] = ["thinkingBudget": b]
+        case nil: break
+        }
 
         let body: [String: Any] = [
             "systemInstruction": ["parts": [["text": system]]],
@@ -120,8 +157,8 @@ struct LLMService {
         ]
         req.httpBody = try JSONSerialization.data(withJSONObject: body)
 
-        let (data, resp) = try await Self.session.data(for: req)
-        try Self.check(resp, data)
+        let (data, resp) = try await session.data(for: req)
+        try check(resp, data)
         guard let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let candidates = obj["candidates"] as? [[String: Any]],
               let content = candidates.first?["content"] as? [String: Any],

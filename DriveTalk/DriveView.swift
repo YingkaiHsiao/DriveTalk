@@ -59,6 +59,11 @@ struct DriveView: View {
             Text("\(settings.provider.rawValue)・\(settings.level.rawValue)\(settings.feedbackEnabled ? "・即時糾錯" : "")")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
+            if let t = engine.lastLatency, active {
+                Text("AI 回應 \(t, specifier: "%.1f") 秒")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(t > 4 ? .orange : .secondary)
+            }
         }
     }
 
