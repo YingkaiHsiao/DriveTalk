@@ -1,0 +1,81 @@
+# 在 GitHub 的 macOS 雲端主機上編譯 DriveTalk，產出「未簽署」的 DriveTalk.ipa
+# 下載後用 Windows 上的 Sideloadly 以你的 Apple ID 簽署並安裝到 iPhone。
+name: Build iOS IPA
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]          # 推送 v1.0 這類 tag 時，另外建立 Release 方便下載
+  workflow_dispatch:        # 可在 Actions 頁面手動按「Run workflow」
+
+permissions:
+  contents: write           # 建立 Release 需要
+
+jobs:
+  build:
+    runs-on: macos-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select latest stable Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Show versions
+        run: |
+          xcodebuild -version
+          xcodebuild -showsdks | grep -i iphoneos
+
+      - name: Build (unsigned, Release)
+        run: |
+          set -o pipefail
+          xcodebuild build \
+            -project DriveTalk.xcodeproj \
+            -target DriveTalk \
+            -configuration Release \
+            -sdk iphoneos \
+            SYMROOT="$PWD/build" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            2>&1 | tee build.log | grep -E "error:|warning: .*deprecated|BUILD (SUCCEEDED|FAILED)" || true
+          # 以實際產物判斷是否成功
+          test -d build/Release-iphoneos/DriveTalk.app
+
+      - name: Show compile errors
+        if: failure()
+        run: |
+          echo "======== 編譯錯誤（請把這段貼給 Claude）========"
+          grep -E "error:" build.log | sort -u | head -50 || echo "找不到 error: 行，請下載 build-log 查看"
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: build.log
+          if-no-files-found: ignore
+
+      - name: Package IPA
+        run: |
+          mkdir -p Payload
+          cp -R build/Release-iphoneos/DriveTalk.app Payload/
+          zip -qry DriveTalk.ipa Payload
+          ls -lh DriveTalk.ipa
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: DriveTalk-ipa
+          path: DriveTalk.ipa
+          retention-days: 30
+
+      - name: Create Release (tags only)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: DriveTalk.ipa
