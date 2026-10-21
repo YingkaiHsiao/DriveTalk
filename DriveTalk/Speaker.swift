@@ -8,6 +8,9 @@ final class Speaker: NSObject, ObservableObject {
     private var player: AVAudioPlayer?
     private var continuation: CheckedContinuation<Void, Never>?
     private var currentID: ObjectIdentifier?
+    /// Utterances handed to the synthesizer's own queue (spoken back-to-back with no gap).
+    private var queued: Set<ObjectIdentifier> = []
+    private var idleWaiters: [CheckedContinuation<Void, Never>] = []
 
     override init() {
         super.init()
@@ -15,16 +18,48 @@ final class Speaker: NSObject, ObservableObject {
         synth.usesApplicationAudioSession = true
     }
 
+    var isBusy: Bool { !queued.isEmpty || currentID != nil }
+
     /// Speaks with the best installed Apple voice for `language` (e.g. "en-US", "zh-TW").
     func speak(_ text: String, language: String = "en-US", rate: Float = 0.48) async {
-        stop()
-        let u = AVSpeechUtterance(string: text)
-        u.voice = Self.bestVoice(for: language)
-        u.rate = rate
-        u.postUtteranceDelay = 0.15
+        if isBusy { stop() }   // don't cancel the silent prewarm utterances
+        let u = Self.utterance(text, language: language, rate: rate)
         await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
             continuation = c
             currentID = ObjectIdentifier(u)
+            synth.speak(u)
+        }
+    }
+
+    /// Adds text to the synthesizer queue without waiting. Queued utterances play back-to-back,
+    /// so switching English → Chinese or sentence → sentence has no pause.
+    func enqueue(_ text: String, language: String = "en-US", rate: Float = 0.48) {
+        let u = Self.utterance(text, language: language, rate: rate)
+        queued.insert(ObjectIdentifier(u))
+        synth.speak(u)
+    }
+
+    /// Waits until everything queued with `enqueue` has been spoken (or stopped).
+    func waitUntilIdle() async {
+        guard !queued.isEmpty else { return }
+        await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
+            idleWaiters.append(c)
+        }
+    }
+
+    /// Speaks several segments back-to-back and waits for the end.
+    func speakSequence(_ segments: [(text: String, language: String)], rate: Float) async {
+        if isBusy { stop() }
+        for seg in segments where !seg.text.isEmpty { enqueue(seg.text, language: seg.language, rate: rate) }
+        await waitUntilIdle()
+    }
+
+    /// Loads the voices in advance (the first utterance with a new voice can take a second or more).
+    func prewarm(_ languages: [String]) {
+        for lang in languages {
+            let u = Self.utterance(" ", language: lang, rate: 0.5)
+            u.volume = 0
+            u.postUtteranceDelay = 0
             synth.speak(u)
         }
     }
@@ -49,23 +84,85 @@ final class Speaker: NSObject, ObservableObject {
         player?.stop()
         player = nil
         if let id = currentID { done(id) }
+        queued.removeAll()
+        resumeIdleWaiters()
     }
 
     fileprivate func done(_ id: ObjectIdentifier) {
+        if queued.remove(id) != nil, queued.isEmpty { resumeIdleWaiters() }
         guard id == currentID, let c = continuation else { return }
         continuation = nil
         currentID = nil
         c.resume()
     }
 
+    private func resumeIdleWaiters() {
+        let waiters = idleWaiters
+        idleWaiters = []
+        waiters.forEach { $0.resume() }
+    }
+
+    private static func utterance(_ text: String, language: String, rate: Float) -> AVSpeechUtterance {
+        let u = AVSpeechUtterance(string: text)
+        u.voice = bestVoice(for: language)
+        u.rate = rate
+        u.postUtteranceDelay = 0.05
+        return u
+    }
+
+    private static var voiceCache: [String: AVSpeechSynthesisVoice] = [:]
+
+    /// Best installed voice (premium > enhanced > default), cached — listing voices is slow.
+    /// Download better voices in Settings > Accessibility > Spoken Content > Voices.
     static func bestVoice(for language: String) -> AVSpeechSynthesisVoice? {
+        if let v = voiceCache[language] { return v }
         let candidates = AVSpeechSynthesisVoice.speechVoices().filter {
             $0.language == language && !$0.voiceTraits.contains(.isNoveltyVoice)
         }
-        // premium > enhanced > default. Download better voices in
-        // Settings > Accessibility > Spoken Content > Voices.
-        return candidates.max { $0.quality.rawValue < $1.quality.rawValue }
-            ?? AVSpeechSynthesisVoice(language: language)
+        let v = candidates.max { $0.quality.rawValue < $1.quality.rawValue } ?? AVSpeechSynthesisVoice(language: language)
+        if let v { voiceCache[language] = v }
+        return v
+    }
+}
+
+/// A short soft "ding" so you hear immediately that your turn was received.
+@MainActor
+final class Chime {
+    static let shared = Chime()
+    private var player: AVAudioPlayer?
+
+    private init() {
+        player = try? AVAudioPlayer(data: Self.makeTone())
+        player?.volume = 0.35
+        player?.prepareToPlay()
+    }
+
+    func play() {
+        player?.currentTime = 0
+        player?.play()
+    }
+
+    /// 110 ms, two-note sine tone with fade in/out, as a 16-bit mono WAV.
+    private static func makeTone() -> Data {
+        let rate = 22_050.0, duration = 0.11
+        let n = Int(rate * duration)
+        var samples = [Int16](repeating: 0, count: n)
+        for i in 0..<n {
+            let t = Double(i) / rate
+            let freq = i < n / 2 ? 880.0 : 1320.0
+            let env = min(1, Double(i) / 300) * min(1, Double(n - i) / 600)
+            samples[i] = Int16(sin(2 * .pi * freq * t) * env * 12_000)
+        }
+        var d = Data()
+        func u32(_ v: UInt32) { var x = v.littleEndian; d.append(Data(bytes: &x, count: 4)) }
+        func u16(_ v: UInt16) { var x = v.littleEndian; d.append(Data(bytes: &x, count: 2)) }
+        let dataSize = UInt32(n * 2)
+        d.append("RIFF".data(using: .ascii)!); u32(36 + dataSize)
+        d.append("WAVEfmt ".data(using: .ascii)!); u32(16); u16(1); u16(1)
+        u32(UInt32(rate)); u32(UInt32(rate) * 2); u16(2); u16(16)
+        d.append("data".data(using: .ascii)!); u32(dataSize)
+        samples.withUnsafeBufferPointer { d.append(Data(buffer: $0)) }
+        return d
     }
 }
 
@@ -112,10 +209,7 @@ final class Pronouncer: ObservableObject {
         prepareSession()
         speakingID = id
         playTask = Task {
-            for (text, lang) in segments {
-                if Task.isCancelled { break }
-                await speaker.speak(text, language: lang, rate: rate)
-            }
+            await speaker.speakSequence(segments.map { (text: $0.0, language: $0.1) }, rate: rate)
             if !Task.isCancelled { speakingID = nil }
         }
     }

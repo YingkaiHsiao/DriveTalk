@@ -43,6 +43,7 @@ struct DriveView: View {
                         .disabled(active)
                 }
             }
+            .onAppear { LLMService.warmUp(settings.provider) }
             .sheet(isPresented: $showSettings) { SettingsView() }
             .sheet(isPresented: $showHistory) { HistoryView(store: engine.history) }
             .sheet(isPresented: $showTranscript) { TranscriptView(messages: engine.messages) }

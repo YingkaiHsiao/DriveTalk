@@ -27,7 +27,7 @@ struct SpeedTestView: View {
 
     /// OpenAI models covered by the "share data → free daily tokens" small-model group.
     private static let openAIFree: Set<String> = [
-        "gpt-4.1-mini", "gpt-4.1-nano", "gpt-4o-mini", "gpt-5-mini", "gpt-5-nano", "gpt-5.4-mini", "gpt-5.4-nano",
+        "gpt-4.1-mini", "gpt-4.1-nano", "gpt-4o-mini", "gpt-5-mini", "gpt-5-nano", "gpt-5.4-mini", "gpt-5.4-nano", "gpt-5.6-luna", "gpt-5.6-terra",
     ]
 
     private var defaultModels: [String] { ModelCatalog.options(for: settings.provider).map(\.id) }

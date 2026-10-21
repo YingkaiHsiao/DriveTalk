@@ -229,7 +229,9 @@ final class SpeechRecognizer: ObservableObject {
         if let text, !text.isEmpty {
             partial = text
             heardSomething = true
-            armTimer(silenceTimeout, generation: gen)
+            // A finished-looking sentence (ends with . ? !) → end the turn a bit sooner.
+            let ended = text.last.map { ".?!。？！".contains($0) } ?? false
+            armTimer(ended ? max(0.8, silenceTimeout * 0.7) : silenceTimeout, generation: gen)
         }
         if isFinal || failed { finish() }
     }

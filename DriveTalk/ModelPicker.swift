@@ -11,7 +11,9 @@ enum ModelCatalog {
         switch provider {
         case .openAI:
             return [
-                Option(id: "gpt-4.1-mini", note: "推薦・快・免費額度"),
+                Option(id: "gpt-5.6-luna", note: "新・快又聰明・免費額度"),
+                Option(id: "gpt-5.6-terra", note: "新・更聰明・免費額度"),
+                Option(id: "gpt-4.1-mini", note: "穩定・快・免費額度"),
                 Option(id: "gpt-4.1-nano", note: "最快・免費額度・糾錯較弱"),
                 Option(id: "gpt-4o-mini", note: "快・免費額度"),
                 Option(id: "gpt-5-mini", note: "推理模型・免費額度"),

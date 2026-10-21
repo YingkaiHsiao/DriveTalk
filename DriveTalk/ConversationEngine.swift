@@ -96,6 +96,9 @@ final class ConversationEngine: ObservableObject {
             return
         }
         UIApplication.shared.isIdleTimerDisabled = true
+        LLMService.warmUp(s.provider)
+        speaker.prewarm(["en-US"] + (s.feedbackLanguage == .chinese || s.shadowSayChinese ? ["zh-TW"] : []))
+        Chime.shared.play()
         let startedAt = Date()
         defer { ProgressStore.shared.addPractice(seconds: Date().timeIntervalSince(startedAt)) }
 
@@ -182,6 +185,7 @@ final class ConversationEngine: ObservableObject {
                 continue   // keep listening quietly — the driver may be busy
             }
             errorText = nil
+            Chime.shared.play()
 
             switch VoiceCommand(heard) {
             case .end:
@@ -249,14 +253,28 @@ final class ConversationEngine: ObservableObject {
         phase = .thinking
         llmHistory.append(LLMMessage(role: "user", content: userText))
         trimHistory()
-        var parser = StreamSpeechParser()
+        let st = TurnState()   // box: mutated from the streaming callback
         let feedbackLang = s.feedbackLanguage == .chinese ? "zh-TW" : "en-US"
         let t0 = Date()
-        var latencyMarked = false
+        turnCounter += 1
+        let myTurn = turnCounter
+        turnFirstAudio = false
+
+        // If the network is slow, say a short filler so the silence doesn't feel broken (no tokens used).
+        if userText != PromptBuilder.startToken, !(s.useOpenAITTS && !s.openAIKey.isEmpty) {
+            Task { [weak self] in
+                try? await Task.sleep(for: .seconds(2.5))
+                guard let self, self.turnCounter == myTurn, !self.turnFirstAudio, self.phase == .thinking,
+                      !Task.isCancelled else { return }
+                self.speaker.enqueue(["Hmm, let me think.", "Let me see.", "Okay, one moment."].randomElement()!,
+                                     language: "en-US", rate: Float(s.speechRate))
+            }
+        }
 
         func speak(_ segments: [StreamSpeechParser.Segment]) {
             for seg in segments {
-                if !latencyMarked { lastLatency = Date().timeIntervalSince(t0); latencyMarked = true }
+                turnFirstAudio = true
+                if !st.latencyMarked { lastLatency = Date().timeIntervalSince(t0); st.latencyMarked = true }
                 switch seg {
                 case .feedback(let t): enqueueSpeech(t, feedbackLang, s)
                 case .chinese(let t): enqueueSpeech(t, "zh-TW", s)
@@ -268,11 +286,11 @@ final class ConversationEngine: ObservableObject {
         var raw = ""
         do {
             let stats = try await service.stream(system: system, messages: llmHistory, maxTokens: 400) { delta in
-                speak(parser.feed(delta))
+                speak(st.parser.feed(delta))
             }
             raw = stats.text
         } catch {
-            if !parser.emittedAny || Task.isCancelled {
+            if !st.parser.emittedAny || Task.isCancelled {
                 llmHistory.removeLast()
                 cancelSpeech()
                 errorText = error.localizedDescription
@@ -281,17 +299,17 @@ final class ConversationEngine: ObservableObject {
                 }
                 return false
             }
-            raw = parser.receivedText   // keep what already arrived and was spoken
+            raw = st.parser.receivedText   // keep what already arrived and was spoken
         }
-        speak(parser.finish())
+        speak(st.parser.finish())
         if Task.isCancelled { llmHistory.removeLast(); return false }
 
         let parsed = PromptBuilder.parse(raw)
-        if !parser.emittedAny {
+        if !st.parser.emittedAny {
             // Model ignored the line format: speak the parsed reply in one go.
             if !parsed.explainZh.isEmpty { enqueueSpeech(parsed.explainZh, "zh-TW", s) }
             if !parsed.reply.isEmpty { enqueueSpeech(parsed.reply, "en-US", s) }
-            if !latencyMarked { lastLatency = Date().timeIntervalSince(t0) }
+            if !st.latencyMarked { lastLatency = Date().timeIntervalSince(t0) }
         }
         for w in parsed.vocab { VocabStore.shared.add(w, source: "對話") }
         applyGrades(parsed.graded)
@@ -315,9 +333,18 @@ final class ConversationEngine: ObservableObject {
     // MARK: Speech queue (lets speaking overlap with the streaming reply)
 
     private var speechItems: [(String, String)] = []
+    private var turnCounter = 0
+    private var turnFirstAudio = false
     private var speechTask: Task<Void, Never>?
 
     private func enqueueSpeech(_ text: String, _ language: String, _ s: SettingsStore) {
+        guard !Task.isCancelled else { return }
+        if !(s.useOpenAITTS && !s.openAIKey.isEmpty) {
+            // Apple voices: hand straight to the synthesizer queue → no gap between sentences/languages.
+            phase = .speaking
+            speaker.enqueue(text, language: language, rate: Float(s.speechRate))
+            return
+        }
         speechItems.append((text, language))
         guard speechTask == nil else { return }
         speechTask = Task { [weak self] in
@@ -335,6 +362,7 @@ final class ConversationEngine: ObservableObject {
             await t.value
             if speechTask == t { speechTask = nil }
         }
+        await speaker.waitUntilIdle()
     }
 
     private func cancelSpeech() {
@@ -403,12 +431,23 @@ final class ConversationEngine: ObservableObject {
             let saved = ProgressStore.shared.expressionsForPractice(limit: savedOnly ? 10 : 3)
             items += saved.map { (en: $0.better, zh: "", exprID: UUID?.some($0.id)) }
             if !savedOnly {
-                phase = .thinking
-                do {
-                    let gen = try await StudyService(settings: s).shadowSentences(topic: s.shadowTopic, level: s.level, count: 8)
-                    items += gen.map { (en: $0.en, zh: $0.zh, exprID: UUID?.none) }
-                } catch {
-                    errorText = error.localizedDescription
+                // Use sentences prepared in advance (instant start), and prepare the next batch in the background.
+                var batch = ShadowCache.take(topic: s.shadowTopic, level: s.level, count: 8)
+                if batch.count < 4 {
+                    phase = .thinking
+                    do {
+                        batch += try await StudyService(settings: s).shadowSentences(topic: s.shadowTopic, level: s.level, count: 8)
+                    } catch {
+                        errorText = error.localizedDescription
+                    }
+                }
+                items += batch.map { (en: $0.en, zh: $0.zh, exprID: UUID?.none) }
+                let topic = s.shadowTopic, level = s.level
+                Task { [weak s] in
+                    guard let s, ShadowCache.count(topic: topic, level: level) < 8 else { return }
+                    if let more = try? await StudyService(settings: s).shadowSentences(topic: topic, level: level, count: 12) {
+                        ShadowCache.add(more, topic: topic, level: level)
+                    }
                 }
             }
             if Task.isCancelled { return }
@@ -436,9 +475,16 @@ final class ConversationEngine: ObservableObject {
                 sentence: while attempt < 3 && !Task.isCancelled {
                     attempt += 1
                     await waitIfInterrupted()
-                    await say(item.en, settings: s, rateScale: 0.9)
-                    if attempt == 1, s.shadowSayChinese, !item.zh.isEmpty {
-                        await say(item.zh, language: "zh-TW", settings: s)
+                    if attempt == 1, s.shadowSayChinese, !item.zh.isEmpty, !(s.useOpenAITTS && !s.openAIKey.isEmpty) {
+                        // Queue English + Chinese together so there is no pause between them.
+                        phase = .speaking
+                        await speaker.speakSequence([(text: item.en, language: "en-US"), (text: item.zh, language: "zh-TW")],
+                                                    rate: Float(s.speechRate * 0.9))
+                    } else {
+                        await say(item.en, settings: s, rateScale: 0.9)
+                        if attempt == 1, s.shadowSayChinese, !item.zh.isEmpty {
+                            await say(item.zh, language: "zh-TW", settings: s)
+                        }
                     }
                     if Task.isCancelled { return }
                     phase = .listening
@@ -575,6 +621,48 @@ final class ConversationEngine: ObservableObject {
         interrupted = false
         phase = .idle
         loopTask = nil
+    }
+}
+
+/// Mutable per-turn state shared with the streaming callback.
+@MainActor
+private final class TurnState {
+    var parser = StreamSpeechParser()
+    var latencyMarked = false
+}
+
+// MARK: - Shadowing sentence cache (prepared in advance so a session starts instantly)
+
+@MainActor
+enum ShadowCache {
+    private static func key(_ topic: ShadowTopic, _ level: EnglishLevel) -> String {
+        "shadowCache|\(topic.rawValue)|\(level.rawValue)"
+    }
+
+    private static func load(_ k: String) -> [ShadowSentence] {
+        guard let data = UserDefaults.standard.data(forKey: k),
+              let list = try? JSONDecoder().decode([ShadowSentence].self, from: data) else { return [] }
+        return list
+    }
+
+    private static func store(_ list: [ShadowSentence], _ k: String) {
+        if let data = try? JSONEncoder().encode(list) { UserDefaults.standard.set(data, forKey: k) }
+    }
+
+    static func count(topic: ShadowTopic, level: EnglishLevel) -> Int { load(key(topic, level)).count }
+
+    static func take(topic: ShadowTopic, level: EnglishLevel, count: Int) -> [ShadowSentence] {
+        let k = key(topic, level)
+        var list = load(k)
+        let taken = Array(list.prefix(count))
+        list.removeFirst(taken.count)
+        store(list, k)
+        return taken
+    }
+
+    static func add(_ more: [ShadowSentence], topic: ShadowTopic, level: EnglishLevel) {
+        let k = key(topic, level)
+        store(Array((load(k) + more).suffix(40)), k)
     }
 }
 

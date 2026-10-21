@@ -75,6 +75,21 @@ struct LLMService {
         throw LLMError.badResponse
     }
 
+    /// Opens the TLS connection to the API ahead of time (first request after idle is the slowest).
+    static func warmUp(_ provider: AIProvider) {
+        let host: String
+        switch provider {
+        case .openAI: host = "https://api.openai.com/v1/models"
+        case .claude: host = "https://api.anthropic.com/v1/models"
+        case .gemini: host = "https://generativelanguage.googleapis.com/v1beta/models"
+        }
+        guard let url = URL(string: host) else { return }
+        var req = URLRequest(url: url)
+        req.httpMethod = "HEAD"
+        req.timeoutInterval = 5
+        Task.detached { [req] in _ = try? await LLMService.session.data(for: req) }
+    }
+
     /// Reasoning models (gpt-5*, o-series) think before answering, which is slow for conversation.
     /// Ask for the lowest effort the model accepts; nil = don't send the parameter.
     static func reasoningCandidates(for model: String) -> [String?] {
