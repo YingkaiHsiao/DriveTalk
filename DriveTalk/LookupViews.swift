@@ -522,7 +522,7 @@ private struct AskPane: View {
                     ForEach(samples, id: \.self) { q in
                         Button(q) { input = q; Task { await ask() } }.font(.callout)
                     }
-                    Text("開車時也能直接用中文問（設定開啟「中英雙語辨識」），AI 會用中文語音解釋。")
+                    Text("開車時也能用中文問：先說「Chinese please」再說中文（或在設定改用 OpenAI 高準確度辨識直接說中文），AI 會用中文語音解釋。")
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }

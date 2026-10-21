@@ -69,6 +69,7 @@ final class ConversationEngine: ObservableObject {
     /// Stops the session; a learning summary is generated if there was enough conversation.
     func stop() {
         loopTask?.cancel()
+        cancelSpeech()
         recognizer.finish()
         speaker.stop()
     }
@@ -108,7 +109,7 @@ final class ConversationEngine: ObservableObject {
         var article = pendingArticle
         pendingArticle = nil
         pendingShadowSaved = false
-        recognizer.bilingual = s.bilingualRecognition && mode != .shadowing
+        configureRecognition(settings: s, article: article)
 
         if mode == .shadowing {
             await runShadowing(settings: s, savedOnly: shadowSaved || s.shadowTopic == .saved)
@@ -167,8 +168,8 @@ final class ConversationEngine: ObservableObject {
             if Task.isCancelled { break }
 
             phase = .listening
-            recognizer.silenceTimeout = s.silenceTimeout
-            let heard = await recognizer.listen()
+            let heard = await listenOnce(settings: s, chinese: chineseNext)
+            chineseNext = false
             if Task.isCancelled { break }
 
             if heard.isEmpty {
@@ -210,6 +211,10 @@ final class ConversationEngine: ObservableObject {
                 await readArticle(next, settings: s)
                 _ = await assistantTurn(userText: PromptBuilder.startToken, system: system, service: service, settings: s)
                 continue
+            case .chinese:
+                chineseNext = true
+                await say("好，請說中文。", language: "zh-TW", settings: s)
+                continue
             case .skip, .normal:
                 break
             }
@@ -238,50 +243,132 @@ final class ConversationEngine: ObservableObject {
         }
     }
 
-    /// Sends the user's text, speaks feedback + reply. Returns false on network/API failure.
+    /// Sends the user's text and STREAMS the answer: feedback / Chinese explanation / each reply sentence
+    /// is spoken as soon as it arrives. Returns false on network/API failure.
     private func assistantTurn(userText: String, system: String, service: LLMService, settings s: SettingsStore) async -> Bool {
         phase = .thinking
         llmHistory.append(LLMMessage(role: "user", content: userText))
         trimHistory()
-        do {
-            let t0 = Date()
-            let raw = try await service.complete(system: system, messages: llmHistory, maxTokens: 400, json: true)
-            lastLatency = Date().timeIntervalSince(t0)
-            if Task.isCancelled { llmHistory.removeLast(); return false }
-            let parsed = PromptBuilder.parse(raw)
-            for w in parsed.vocab { VocabStore.shared.add(w, source: "對話") }
-            applyGrades(parsed.graded)
-            llmHistory.append(LLMMessage(role: "assistant", content: raw))
+        var parser = StreamSpeechParser()
+        let feedbackLang = s.feedbackLanguage == .chinese ? "zh-TW" : "en-US"
+        let t0 = Date()
+        var latencyMarked = false
 
-            if !parsed.feedback.isEmpty, let i = messages.lastIndex(where: { $0.role == .user }) {
-                messages[i].feedback = parsed.feedback
-                if !parsed.better.isEmpty {
-                    ProgressStore.shared.addExpression(original: messages[i].text, better: parsed.better,
-                                                       note: parsed.feedback, source: "對話糾錯")
+        func speak(_ segments: [StreamSpeechParser.Segment]) {
+            for seg in segments {
+                if !latencyMarked { lastLatency = Date().timeIntervalSince(t0); latencyMarked = true }
+                switch seg {
+                case .feedback(let t): enqueueSpeech(t, feedbackLang, s)
+                case .chinese(let t): enqueueSpeech(t, "zh-TW", s)
+                case .reply(let t): enqueueSpeech(t, "en-US", s)
                 }
             }
-            let shown = [parsed.explainZh, parsed.reply].filter { !$0.isEmpty }.joined(separator: "\n")
-            messages.append(ChatMessage(role: .assistant, text: shown))
-            lastReply = parsed.reply.isEmpty ? parsed.explainZh : parsed.reply
-
-            if !parsed.feedback.isEmpty {
-                let lang = s.feedbackLanguage == .chinese ? "zh-TW" : "en-US"
-                await say(parsed.feedback, language: lang, settings: s)
-            }
-            if !parsed.explainZh.isEmpty, !Task.isCancelled {
-                await say(parsed.explainZh, language: "zh-TW", settings: s)
-            }
-            if Task.isCancelled || parsed.reply.isEmpty { return true }
-            await say(parsed.reply, settings: s)
-            return true
-        } catch {
-            llmHistory.removeLast()
-            errorText = error.localizedDescription
-            if !Task.isCancelled {
-                await say("Sorry, I had a connection problem. Could you say that again?", settings: s)
-            }
-            return false
         }
+
+        var raw = ""
+        do {
+            let stats = try await service.stream(system: system, messages: llmHistory, maxTokens: 400) { delta in
+                speak(parser.feed(delta))
+            }
+            raw = stats.text
+        } catch {
+            if !parser.emittedAny || Task.isCancelled {
+                llmHistory.removeLast()
+                cancelSpeech()
+                errorText = error.localizedDescription
+                if !Task.isCancelled {
+                    await say("Sorry, I had a connection problem. Could you say that again?", settings: s)
+                }
+                return false
+            }
+            raw = parser.receivedText   // keep what already arrived and was spoken
+        }
+        speak(parser.finish())
+        if Task.isCancelled { llmHistory.removeLast(); return false }
+
+        let parsed = PromptBuilder.parse(raw)
+        if !parser.emittedAny {
+            // Model ignored the line format: speak the parsed reply in one go.
+            if !parsed.explainZh.isEmpty { enqueueSpeech(parsed.explainZh, "zh-TW", s) }
+            if !parsed.reply.isEmpty { enqueueSpeech(parsed.reply, "en-US", s) }
+            if !latencyMarked { lastLatency = Date().timeIntervalSince(t0) }
+        }
+        for w in parsed.vocab { VocabStore.shared.add(w, source: "對話") }
+        applyGrades(parsed.graded)
+        llmHistory.append(LLMMessage(role: "assistant", content: raw))
+
+        if !parsed.feedback.isEmpty, let i = messages.lastIndex(where: { $0.role == .user }) {
+            messages[i].feedback = parsed.feedback
+            if !parsed.better.isEmpty {
+                ProgressStore.shared.addExpression(original: messages[i].text, better: parsed.better,
+                                                   note: parsed.feedback, source: "對話糾錯")
+            }
+        }
+        let shown = [parsed.explainZh, parsed.reply].filter { !$0.isEmpty }.joined(separator: "\n")
+        messages.append(ChatMessage(role: .assistant, text: shown))
+        lastReply = parsed.reply.isEmpty ? parsed.explainZh : parsed.reply
+
+        await drainSpeech()
+        return true
+    }
+
+    // MARK: Speech queue (lets speaking overlap with the streaming reply)
+
+    private var speechItems: [(String, String)] = []
+    private var speechTask: Task<Void, Never>?
+
+    private func enqueueSpeech(_ text: String, _ language: String, _ s: SettingsStore) {
+        speechItems.append((text, language))
+        guard speechTask == nil else { return }
+        speechTask = Task { [weak self] in
+            guard let self else { return }
+            while !self.speechItems.isEmpty && !Task.isCancelled {
+                let item = self.speechItems.removeFirst()
+                await self.say(item.0, language: item.1, settings: s)
+            }
+            self.speechTask = nil
+        }
+    }
+
+    private func drainSpeech() async {
+        while let t = speechTask {
+            await t.value
+            if speechTask == t { speechTask = nil }
+        }
+    }
+
+    private func cancelSpeech() {
+        speechItems.removeAll()
+        speechTask?.cancel()
+        speechTask = nil
+        speaker.stop()
+    }
+
+    // MARK: Recognition setup
+
+    private var chineseNext = false
+    private var transcribePrompt = ""
+
+    private static let baseHints = [
+        "U-Boot", "device tree", "kernel", "Linux", "BSP", "Yocto", "OpenWrt", "Wi-Fi", "firmware", "bootloader",
+        "backport", "patch", "CVE", "driver", "UART", "bring-up", "SoC", "debug", "log", "schedule", "deadline",
+    ]
+
+    private func configureRecognition(settings s: SettingsStore, article: NewsArticle?) {
+        var hints = Self.baseHints
+        hints += VocabStore.shared.entries.prefix(60).map(\.info.word)
+        hints += article?.vocabulary.map(\.word) ?? []
+        recognizer.hints = hints
+        recognizer.onDeviceOnly = !s.appleServerRecognition
+        transcribePrompt = "A Taiwanese engineer practicing spoken English; may mix in Mandarin Chinese " +
+            "(write Chinese in Traditional characters). Terms: " + hints.prefix(40).joined(separator: ", ")
+    }
+
+    private func listenOnce(settings s: SettingsStore, chinese: Bool = false) async -> String {
+        recognizer.silenceTimeout = s.silenceTimeout
+        let transcriber: OpenAITranscriber? = (s.speechEngine == .openAI && !s.openAIKey.isEmpty)
+            ? OpenAITranscriber(apiKey: s.openAIKey, prompt: transcribePrompt) : nil
+        return await recognizer.listen(locale: chinese ? "zh-TW" : "en-US", transcriber: transcriber)
     }
 
     /// Smart review: update the spaced-repetition schedule from the AI's grading.
@@ -355,8 +442,7 @@ final class ConversationEngine: ObservableObject {
                     }
                     if Task.isCancelled { return }
                     phase = .listening
-                    recognizer.silenceTimeout = s.silenceTimeout
-                    let heard = await recognizer.listen()
+                    let heard = await listenOnce(settings: s)
                     if Task.isCancelled { return }
                     if heard.isEmpty { continue }   // silence: play it again
 
@@ -366,6 +452,9 @@ final class ConversationEngine: ObservableObject {
                         return
                     case .skip, .nextNews:
                         break sentence
+                    case .chinese:
+                        attempt -= 1
+                        continue
                     case .repeatLast:
                         attempt -= 1
                         continue
@@ -453,7 +542,7 @@ final class ConversationEngine: ObservableObject {
 
     /// Keep the context small (fast + cheap). Must start with a user message for Claude.
     private func trimHistory() {
-        let maxCount = 30
+        let maxCount = 16   // shorter history = faster replies and fewer tokens
         if llmHistory.count > maxCount {
             llmHistory.removeFirst(llmHistory.count - maxCount)
         }
@@ -492,7 +581,7 @@ final class ConversationEngine: ObservableObject {
 // MARK: - Voice commands (hands-free control)
 
 enum VoiceCommand {
-    case end, repeatLast, slower, faster, nextNews, skip, normal
+    case end, repeatLast, slower, faster, nextNews, skip, chinese, normal
 
     init(_ text: String) {
         let t = text.lowercased()
@@ -510,6 +599,8 @@ enum VoiceCommand {
             self = .faster
         } else if words <= 5 && (t.contains("next news") || t.contains("next story") || t.contains("another story")) {
             self = .nextNews
+        } else if words <= 3 && t.contains("chinese") && !t.contains("explain") {
+            self = .chinese
         } else if words <= 3 && (t == "next" || t == "skip" || t.contains("next one") || t.contains("next sentence")
                                  || t.contains("skip it") || t.contains("skip this")) {
             self = .skip

@@ -13,35 +13,27 @@ struct ParsedReply {
 enum PromptBuilder {
     static let startToken = "[START]"
 
+    /// System prompt for the voice conversation. The reply uses a line-tagged plain-text format
+    /// (not JSON) so it can be streamed and spoken sentence by sentence while it is still arriving.
     static func system(mode: PracticeMode, scenario: Scenario?, level: EnglishLevel,
                        feedback: Bool, feedbackLanguage: FeedbackLanguage,
                        article: NewsArticle? = nil, reviewWords: [VocabEntry] = [],
                        reviewExpressions: [SavedExpression] = []) -> String {
         var p = """
-        You are DriveTalk, a friendly English speaking partner for a Taiwanese engineer \
-        (native Mandarin speaker) who practices spoken English while DRIVING.
+        You are DriveTalk, a friendly English speaking partner for a Taiwanese engineer (native Mandarin speaker) \
+        practicing spoken English while DRIVING. Everything you say is read aloud by text-to-speech.
 
-        HARD RULES (driving safety & voice-only):
-        - Everything in "reply" will be read aloud by text-to-speech. Write plain spoken English only: \
-        no markdown, no bullet points, no emojis, no URLs, no code, no parentheses asides.
-        - Keep each reply SHORT: 1 to 3 sentences, under 45 words. Never lecture.
-        - Usually end with ONE simple question so the conversation keeps going.
-        - Never ask the user to look at a screen, read, type, or write anything.
-        - If the user says they need to focus on driving or traffic, reply with a very short okay and wait.
-        - The user's text comes from speech recognition and may contain transcription mistakes. \
-        Silently ignore capitalization, punctuation and obvious recognition glitches; guess the intended meaning.
-        - If the user asks for help or says they don't know how to say something, give one short example \
-        sentence they could say, then let them try.
-
-        VOICE DICTIONARY (the user cannot look things up while driving):
-        - If the user asks what an English word or phrase means (e.g. "What does mitigate mean?"), explain it \
-        in simple English with one short example sentence, then return to the conversation.
-        - If the user asks how to say something in English, give the natural English phrase, ask them to repeat it, then continue.
-        - CHINESE QUESTIONS: If the user speaks Chinese (e.g. 「這個字是什麼意思？」「剛剛那句怎麼說比較自然？」「延期英文怎麼說？」) \
-        or asks you to explain in Chinese, put a short, clear explanation in Traditional Chinese (Taiwan) in "explainZh" \
-        (it is read aloud by a Chinese voice; English words inside it are fine), and keep "reply" in English: \
-        usually the English phrase to repeat or a question to continue. Otherwise "explainZh" is "".
-        - Whenever you teach a word or phrase this way, also add it to "vocab".
+        RULES:
+        - Plain spoken English: no markdown, lists, emojis, URLs, code or parentheses.
+        - Replies are SHORT: 1-3 sentences, under 45 words. Usually end with ONE simple question.
+        - Never ask the user to look at a screen, read, type or write.
+        - If the user must focus on driving, reply with a very short okay.
+        - User text comes from speech recognition: ignore punctuation, capitalization and obvious recognition errors.
+        - If the user asks for help, give one short example sentence they could say, then let them try.
+        - If the user asks what an English word means, explain simply with one short example, then continue.
+        - If the user asks how to say something in English, give the natural phrase and ask them to repeat it.
+        - If the user speaks CHINESE or asks for a Chinese explanation, explain briefly in Traditional Chinese (Taiwan) \
+        on the ZH line, and keep REPLY in English (usually the phrase to repeat or a question).
 
         LEARNER LEVEL: \(level.promptDescription)
 
@@ -50,41 +42,34 @@ enum PromptBuilder {
         switch mode {
         case .free:
             p += """
-            MODE: Free conversation. Be a curious, warm conversation partner. Chat about daily life, \
-            work, technology, travel, food, news, hobbies. Follow the user's interests and ask follow-up questions.
+            MODE: Free conversation about daily life, work, technology, travel, food, hobbies. \
+            Follow the user's interests and ask follow-up questions.
 
             """
         case .rolePlay, .workTech:
             if let s = scenario {
                 p += """
-                MODE: Role-play. Stay in character for the whole session.
-                You play: \(s.aiRole).
-                The user plays: \(s.userRole).
-                Scenario goal: \(s.goal).
-                Make it realistic: introduce small complications, ask realistic follow-up questions.
+                MODE: Role-play. Stay in character. You play \(s.aiRole). The user plays \(s.userRole). \
+                Goal: \(s.goal). Be realistic: add small complications and follow-up questions.
 
                 """
             }
             if mode == .workTech {
                 p += """
-                The user is an embedded Linux BSP engineer and team lead (Linux kernel, U-Boot, device tree, \
-                Yocto/OpenWrt, Wi-Fi drivers, CVE backporting, hardware bring-up) at an industrial computer company. \
-                Use realistic technical vocabulary and professional workplace English, and help them sound clear \
-                and confident with customers and overseas colleagues.
+                The user is an embedded Linux BSP engineer and team lead (kernel, U-Boot, device tree, Yocto/OpenWrt, \
+                Wi-Fi drivers, CVE backporting, bring-up) at an industrial computer company. Use realistic technical, \
+                professional workplace English.
 
                 """
             }
         case .news:
             if let a = article {
                 p += """
-                MODE: News discussion. The user has just LISTENED to this short news article (read aloud by the app):
+                MODE: News discussion. The user just LISTENED to this article:
                 Title: \(a.title)
                 \(a.paragraphs.joined(separator: "\n"))
-
-                Discuss it with the user. Ask these questions one at a time, in order, and react naturally to each answer \
-                before moving on: \(a.questions.joined(separator: " | "))
-                After the questions, chat freely about the topic. If the user didn't understand something, explain it simply. \
-                If the user says "next news", the app handles it, so you don't need to.
+                Ask these questions one at a time, reacting naturally to each answer: \(a.questions.joined(separator: " | "))
+                Then chat freely about the topic. Explain simply if the user didn't understand.
 
                 """
             }
@@ -94,15 +79,11 @@ enum PromptBuilder {
             let list = reviewWords.map { "\($0.info.word) (\($0.info.meaningZh))" }.joined(separator: "; ")
             let exprs = reviewExpressions.map { "[\($0.original)] -> [\($0.better)]" }.joined(separator: "; ")
             p += """
-            MODE: Smart review (spaced repetition). Review these items that are due, one at a time:
-            WORDS (word + Chinese meaning): \(list.isEmpty ? "none" : list)
-            EXPRESSIONS the user once said unnaturally -> the better version: \(exprs.isEmpty ? "none" : exprs)
-            For words, vary the question: ask what the word means, give the Chinese meaning and ask for the English word, \
-            or ask the user to make a sentence with it. For expressions, read the user's old version and ask how to say it \
-            more naturally, or give the Chinese idea and ask them to say the better version. Give quick, encouraging \
-            feedback and the correct answer if they miss it, then move on. When everything is done, say so.
-            GRADING: In every turn where the user answered a review item, add it to "graded" with the exact item text \
-            (the word, or the better version of the expression) and whether the answer was basically correct.
+            MODE: Smart review. Review these due items one at a time.
+            WORDS: \(list.isEmpty ? "none" : list)
+            EXPRESSIONS (old way -> better way): \(exprs.isEmpty ? "none" : exprs)
+            Vary questions: meaning of a word, Chinese meaning -> English word, make a sentence; for expressions ask how \
+            to say the old version more naturally. Give quick feedback and the right answer if missed, then move on.
 
             """
         }
@@ -110,32 +91,29 @@ enum PromptBuilder {
         let feedbackRule: String
         if feedback {
             let lang = feedbackLanguage == .chinese
-                ? "Write the explanation part of the feedback in Traditional Chinese (Taiwan), but keep the improved English sentence in English."
-                : "Write the feedback in simple English."
+                ? "Explain in Traditional Chinese, but keep the improved sentence in English."
+                : "Use simple English."
             feedbackRule = """
-            - "feedback": You are also a gentle speaking coach. If the user's LAST utterance had a clear grammar mistake, \
-            wrong word, or very unnatural phrasing, give ONE short correction in this style: Better: "<improved sentence>". \
-            then at most one short reason. Under 30 words. If it was fine or only had minor issues, use "". \
-            Never correct Chinese utterances. \
-            Do not praise every turn. For the very first turn (the user message \(startToken)) always use "". \(lang)
+            FEEDBACK: only if the user's LAST English utterance had a clear grammar mistake, wrong word or very unnatural \
+            phrasing: Better: "<improved sentence>". plus at most one short reason, under 30 words. \(lang) \
+            Skip it for fine sentences, Chinese utterances and \(startToken). Don't praise every turn.
+            BETTER: only with FEEDBACK — just the improved sentence, no quotes.
             """
         } else {
-            feedbackRule = "- \"feedback\": always \"\"."
+            feedbackRule = "Never write FEEDBACK or BETTER lines."
         }
 
         p += """
-        OUTPUT FORMAT: Respond ONLY with a JSON object, no other text:
-        {"feedback": "...", "better": "...", "explainZh": "...", "reply": "...", "vocab": [{"word": "...", "meaningZh": "..."}], "graded": []}
+        OUTPUT FORMAT — plain text, one field per line, in this order, OMIT any line that would be empty:
+        FEEDBACK: ...
+        BETTER: ...
+        ZH: <Chinese explanation, only when needed>
+        REPLY: <your spoken English reply — always present, on ONE line>
+        VOCAB: word = 中文意思; phrase = 中文意思   (only words/phrases you explicitly taught this turn)
+        \(mode == .vocabReview ? "GRADED: item = yes; item = no   (review items the user just answered; item = the word or the better expression)" : "")
         \(feedbackRule)
-        - "better": when "feedback" is not empty, ONLY the improved sentence itself (no quotes); otherwise "".
-        - "explainZh": see CHINESE QUESTIONS; usually "".
-        - "graded": only in smart review mode: [{"item": "...", "correct": true}]; otherwise [].
-        - "reply": your conversational reply following all the rules above.
-        - "vocab": words or phrases you explicitly taught in this turn (dictionary questions, Chinese-to-English, \
-        or the key phrase of a correction), with a short Traditional Chinese meaning. Usually an empty list [].
 
-        When the user message is exactly \(startToken), greet the user briefly and open the conversation \
-        (or ask the first question) with a question.
+        When the user message is exactly \(startToken), greet briefly and open the conversation (or ask the first question).
         """
         return p
     }
@@ -157,40 +135,149 @@ enum PromptBuilder {
         messages.map { "\($0.role == .user ? "USER" : "AI"): \($0.text)" }.joined(separator: "\n")
     }
 
-    /// Parses {"feedback": "...", "reply": "...", "vocab": [...]}; falls back to treating the whole text as the reply.
+    // MARK: Parsing
+
+    /// Parses the tagged format (FEEDBACK/BETTER/ZH/REPLY/VOCAB/GRADED). Falls back to JSON, then to plain text.
     static func parse(_ raw: String) -> ParsedReply {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let start = trimmed.firstIndex(of: "{"),
-           let end = trimmed.lastIndex(of: "}"),
-           start < end,
-           let data = String(trimmed[start...end]).data(using: .utf8),
-           let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-            let fb = (obj["feedback"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            let reply = (obj["reply"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            let explainZh = (obj["explainZh"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            let better = (obj["better"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-                .trimmingCharacters(in: CharacterSet(charactersIn: "\"“”"))
-            let vocab: [WordInfo] = (obj["vocab"] as? [[String: Any]] ?? []).compactMap {
-                guard let w = $0["word"] as? String, let m = $0["meaningZh"] as? String,
-                      !w.isEmpty, !m.isEmpty else { return nil }
-                return WordInfo(word: w, meaningZh: m)
-            }
-            if !reply.isEmpty || !explainZh.isEmpty {
-                let graded: [(item: String, correct: Bool)] = (obj["graded"] as? [[String: Any]] ?? []).compactMap {
-                    guard let item = $0["item"] as? String, !item.isEmpty else { return nil }
-                    return (item: item, correct: ($0["correct"] as? Bool) ?? false)
-                }
-                return ParsedReply(feedback: fb, reply: clean(reply), vocab: vocab,
-                                   explainZh: clean(explainZh), better: better, graded: graded)
+        var fields: [String: String] = [:]
+        for line in trimmed.components(separatedBy: .newlines) {
+            if let pair = TaggedLine.split(line) {
+                fields[pair.0] = (fields[pair.0].map { $0 + " " } ?? "") + pair.1
             }
         }
+        if fields["REPLY"] != nil || fields["ZH"] != nil {
+            return ParsedReply(feedback: fields["FEEDBACK"] ?? "",
+                               reply: clean(fields["REPLY"] ?? ""),
+                               vocab: parsePairs(fields["VOCAB"] ?? "").map { WordInfo(word: $0.0, meaningZh: $0.1) },
+                               explainZh: clean(fields["ZH"] ?? ""),
+                               better: (fields["BETTER"] ?? "").trimmingCharacters(in: CharacterSet(charactersIn: "\"“” ")),
+                               graded: parsePairs(fields["GRADED"] ?? "").map {
+                                   (item: $0.0, correct: ["yes", "y", "true", "correct", "1"].contains($0.1.lowercased()))
+                               })
+        }
+        if let json = parseJSON(trimmed) { return json }
         return ParsedReply(feedback: "", reply: clean(trimmed))
     }
 
+    /// "a = b; c = d" → [(a, b), (c, d)]
+    private static func parsePairs(_ s: String) -> [(String, String)] {
+        s.components(separatedBy: ";").compactMap { part in
+            let kv = part.components(separatedBy: "=")
+            guard kv.count >= 2 else { return nil }
+            let k = kv[0].trimmingCharacters(in: .whitespaces)
+            let v = kv[1...].joined(separator: "=").trimmingCharacters(in: .whitespaces)
+            return k.isEmpty || v.isEmpty ? nil : (k, v)
+        }
+    }
+
+    private static func parseJSON(_ trimmed: String) -> ParsedReply? {
+        guard let start = trimmed.firstIndex(of: "{"), let end = trimmed.lastIndex(of: "}"), start < end,
+              let data = String(trimmed[start...end]).data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        let reply = (obj["reply"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let zh = (obj["explainZh"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !reply.isEmpty || !zh.isEmpty else { return nil }
+        return ParsedReply(feedback: obj["feedback"] as? String ?? "", reply: clean(reply),
+                           explainZh: clean(zh), better: obj["better"] as? String ?? "")
+    }
+
     /// Strip characters TTS would read awkwardly.
-    private static func clean(_ s: String) -> String {
+    static func clean(_ s: String) -> String {
         s.replacingOccurrences(of: "*", with: "")
          .replacingOccurrences(of: "#", with: "")
          .replacingOccurrences(of: "`", with: "")
+         .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
+/// Splits "TAG: value" lines of the reply format.
+enum TaggedLine {
+    static let tags = ["FEEDBACK", "BETTER", "ZH", "REPLY", "VOCAB", "GRADED"]
+
+    static func split(_ line: String) -> (String, String)? {
+        let t = line.trimmingCharacters(in: .whitespaces)
+        for tag in tags {
+            for sep in [":", "："] where t.hasPrefix(tag + sep) {
+                return (tag, String(t.dropFirst(tag.count + sep.count)).trimmingCharacters(in: .whitespaces))
+            }
+        }
+        return nil
+    }
+}
+
+/// Incremental parser for a streaming reply: emits things to speak as soon as they are complete
+/// (whole FEEDBACK / ZH lines, and each finished sentence of REPLY).
+struct StreamSpeechParser {
+    enum Segment { case feedback(String), chinese(String), reply(String) }
+
+    private var buffer = ""
+    private var lineStart = 0          // index (in characters) where the current line starts
+    private var replySpoken = 0        // characters of the current REPLY value already emitted
+    private(set) var emittedAny = false
+    var receivedText: String { buffer }
+
+    mutating func feed(_ delta: String) -> [Segment] {
+        buffer += delta
+        var out: [Segment] = []
+        // Complete lines
+        while true {
+            let chars = Array(buffer)
+            guard let nl = chars[lineStart...].firstIndex(of: "\n") else { break }
+            let line = String(chars[lineStart..<nl])
+            out += finishLine(line)
+            lineStart = nl + 1
+            replySpoken = 0
+        }
+        // Partial REPLY line: emit finished sentences early
+        let current = String(Array(buffer)[lineStart...])
+        if let pair = TaggedLine.split(current), pair.0 == "REPLY" {
+            let chars = Array(pair.1)
+            var i = replySpoken
+            var lastCut: Int?
+            while i < chars.count - 1 {
+                if ".!?".contains(chars[i]) && chars[i + 1] == " " { lastCut = i + 1 }
+                i += 1
+            }
+            if let cut = lastCut, cut > replySpoken {
+                let sentence = String(chars[replySpoken..<cut]).trimmingCharacters(in: .whitespaces)
+                replySpoken = cut
+                if !sentence.isEmpty { out.append(.reply(PromptBuilder.clean(sentence))); emittedAny = true }
+            }
+        }
+        return out
+    }
+
+    /// Call when the stream ends.
+    mutating func finish() -> [Segment] {
+        let rest = String(Array(buffer)[lineStart...])
+        lineStart = buffer.count
+        let out = finishLine(rest)
+        replySpoken = 0
+        return out
+    }
+
+    private mutating func finishLine(_ line: String) -> [Segment] {
+        guard let pair = TaggedLine.split(line) else { return [] }
+        let value = pair.1
+        switch pair.0 {
+        case "FEEDBACK":
+            guard !value.isEmpty else { return [] }
+            emittedAny = true
+            return [.feedback(PromptBuilder.clean(value))]
+        case "ZH":
+            guard !value.isEmpty else { return [] }
+            emittedAny = true
+            return [.chinese(PromptBuilder.clean(value))]
+        case "REPLY":
+            let chars = Array(value)
+            guard replySpoken < chars.count else { return [] }
+            let rest = String(chars[replySpoken...]).trimmingCharacters(in: .whitespaces)
+            guard !rest.isEmpty else { return [] }
+            emittedAny = true
+            return [.reply(PromptBuilder.clean(rest))]
+        default:
+            return []
+        }
     }
 }

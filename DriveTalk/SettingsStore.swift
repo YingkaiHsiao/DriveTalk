@@ -49,8 +49,10 @@ final class SettingsStore: ObservableObject {
     @Published var mode: PracticeMode { didSet { d.set(mode.rawValue, forKey: "mode"); fixScenario() } }
     @Published var scenarioID: String { didSet { d.set(scenarioID, forKey: "scenarioID") } }
     @Published var newsCategory: NewsCategory { didSet { d.set(newsCategory.rawValue, forKey: "newsCategory") } }
-    /// Recognize English AND 中文 at the same time (ask questions in Chinese).
-    @Published var bilingualRecognition: Bool { didSet { d.set(bilingualRecognition, forKey: "bilingualRecognition") } }
+    /// Speech-to-text engine. OpenAI = more accurate (accents, 中英混講) but billed per minute.
+    @Published var speechEngine: SpeechEngine { didSet { d.set(speechEngine.rawValue, forKey: "speechEngine") } }
+    /// Apple recognition via Apple's servers (more accurate) instead of on-device only.
+    @Published var appleServerRecognition: Bool { didSet { d.set(appleServerRecognition, forKey: "appleServerRecognition") } }
     @Published var shadowTopic: ShadowTopic { didSet { d.set(shadowTopic.rawValue, forKey: "shadowTopic") } }
     /// In shadowing, also read the Chinese meaning of each sentence.
     @Published var shadowSayChinese: Bool { didSet { d.set(shadowSayChinese, forKey: "shadowSayChinese") } }
@@ -78,14 +80,15 @@ final class SettingsStore: ObservableObject {
         mode = PracticeMode(rawValue: d.string(forKey: "mode") ?? "") ?? .free
         scenarioID = d.string(forKey: "scenarioID") ?? "fae_boot"
         newsCategory = NewsCategory(rawValue: d.string(forKey: "newsCategory") ?? "") ?? .technology
-        bilingualRecognition = d.object(forKey: "bilingualRecognition") as? Bool ?? true
+        speechEngine = SpeechEngine(rawValue: d.string(forKey: "speechEngine") ?? "") ?? .apple
+        appleServerRecognition = d.object(forKey: "appleServerRecognition") as? Bool ?? true
         shadowTopic = ShadowTopic(rawValue: d.string(forKey: "shadowTopic") ?? "") ?? .work
         shadowSayChinese = d.object(forKey: "shadowSayChinese") as? Bool ?? true
         level = EnglishLevel(rawValue: d.string(forKey: "level") ?? "") ?? .intermediate
         feedbackEnabled = d.object(forKey: "feedbackEnabled") as? Bool ?? true
         feedbackLanguage = FeedbackLanguage(rawValue: d.string(forKey: "feedbackLanguage") ?? "") ?? .english
         speechRate = d.object(forKey: "speechRate") as? Double ?? 0.48
-        silenceTimeout = d.object(forKey: "silenceTimeout") as? Double ?? 1.8
+        silenceTimeout = d.object(forKey: "silenceTimeout") as? Double ?? 1.4
         useOpenAITTS = d.object(forKey: "useOpenAITTS") as? Bool ?? false
         openAIVoice = d.string(forKey: "openAIVoice") ?? "coral"
         fixScenario()

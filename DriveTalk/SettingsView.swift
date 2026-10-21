@@ -19,23 +19,17 @@ struct SettingsView: View {
                         SecureField("OpenAI API Key (sk-...)", text: $settings.openAIKey)
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
-                        TextField("模型", text: $settings.openAIModel)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
+                        ModelPickerField(provider: .openAI, model: $settings.openAIModel)
                     } else if settings.provider == .claude {
                         SecureField("Anthropic API Key (sk-ant-...)", text: $settings.claudeKey)
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
-                        TextField("模型", text: $settings.claudeModel)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
+                        ModelPickerField(provider: .claude, model: $settings.claudeModel)
                     } else {
                         SecureField("Gemini API Key (AIza...)", text: $settings.geminiKey)
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
-                        TextField("模型", text: $settings.geminiModel)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
+                        ModelPickerField(provider: .gemini, model: $settings.geminiModel)
                         Text("免費 Key：aistudio.google.com → Get API key。免費方案有每日次數限制，建議用 Flash-Lite 模型；免費方案的對話可能被 Google 用於改進模型，請勿說公司機密。")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
@@ -86,7 +80,6 @@ struct SettingsView: View {
 
                 Section {
                     Toggle("即時糾錯回饋", isOn: $settings.feedbackEnabled)
-                    Toggle("可以說中文發問（中英雙語辨識）", isOn: $settings.bilingualRecognition)
                     if settings.feedbackEnabled {
                         Picker("回饋說明語言", selection: $settings.feedbackLanguage) {
                             ForEach(FeedbackLanguage.allCases) { Text($0.rawValue).tag($0) }
@@ -95,7 +88,26 @@ struct SettingsView: View {
                 } header: {
                     Text("糾錯")
                 } footer: {
-                    Text("每次你說完，若有明顯的文法或用字問題，AI 會先唸一句更自然的說法，再繼續對話；修正會自動收進「表達方式」。開啟雙語辨識後，可以直接用中文問「這個字什麼意思」，AI 會用中文解釋。")
+                    Text("每次你說完，若有明顯的文法或用字問題，AI 會先唸一句更自然的說法，再繼續對話；修正會自動收進「表達方式」。")
+                }
+
+                Section {
+                    Picker("辨識引擎", selection: $settings.speechEngine) {
+                        ForEach(SpeechEngine.allCases) { Text($0.rawValue).tag($0) }
+                    }
+                    if settings.speechEngine == .apple {
+                        Toggle("使用 Apple 伺服器辨識（較準確）", isOn: $settings.appleServerRecognition)
+                    } else if settings.openAIKey.isEmpty {
+                        Text("需要 OpenAI API Key（即使對話使用 Claude / Gemini）").font(.footnote).foregroundStyle(.orange)
+                        SecureField("OpenAI API Key", text: $settings.openAIKey)
+                            .textInputAutocapitalization(.never)
+                    }
+                } header: {
+                    Text("語音辨識")
+                } footer: {
+                    Text(settings.speechEngine == .apple
+                         ? "免費。想用中文發問時先說「Chinese please」，下一句就用中文辨識。會自動把你生字本與情境的單字當成辨識提示。"
+                         : "說完後把錄音送到 OpenAI（gpt-4o-mini-transcribe）轉文字，台灣口音英文、中英混講都辨識得比較準，可以直接用中文發問。不在每日免費額度內，約每講 1 分鐘 US$0.003。失敗時自動改用 iPhone 辨識。")
                 }
 
                 Section {
@@ -124,11 +136,19 @@ struct SettingsView: View {
                     Text("未開啟 OpenAI 語音時使用 iPhone 內建語音（免費、離線）。到 iOS 設定 > 輔助使用 > 語音內容 > 聲音 > English 下載「進階 (Premium)」語音，音質會好很多。")
                 }
 
+                Section {
+                    NavigationLink("模型速度測試") { SpeedTestView() }
+                } footer: {
+                    Text("用你的手機與網路實測各模型的回應速度與 token 用量，選出最適合開車對話的模型。")
+                }
+
                 Section("語音指令（行車中免動手）") {
                     LabeledContent("重講一次", value: "\"repeat\"")
                     LabeledContent("講慢一點", value: "\"slow down\"")
                     LabeledContent("講快一點", value: "\"speak faster\"")
                     LabeledContent("結束練習", value: "\"stop practice\"")
+                    LabeledContent("用中文問", value: "\"Chinese please\"")
+                    LabeledContent("跳過（跟讀）", value: "\"next\"")
                     LabeledContent("不會說時", value: "\"How do I say…?\"")
                 }
             }

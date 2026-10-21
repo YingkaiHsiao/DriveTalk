@@ -51,6 +51,12 @@ enum ShadowTopic: String, CaseIterable, Identifiable, Codable {
     }
 }
 
+enum SpeechEngine: String, CaseIterable, Identifiable, Codable {
+    case apple = "iPhone 內建（免費）"
+    case openAI = "OpenAI 高準確度"
+    var id: String { rawValue }
+}
+
 enum FeedbackLanguage: String, CaseIterable, Identifiable, Codable {
     case english = "English"
     case chinese = "繁體中文"

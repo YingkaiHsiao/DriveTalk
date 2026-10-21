@@ -148,7 +148,7 @@ struct DriveView: View {
     }
 
     private var voiceCommandHint: some View {
-        Text("請在出發前按下開始，行車中全程用語音。\n語音指令：「repeat」「slow down」「speak faster」「next news」「stop practice」\n不懂的字直接問：「What does … mean?」")
+        Text("請在出發前按下開始，行車中全程用語音。\n語音指令：「repeat」「slow down」「speak faster」「next news」「stop practice」\n不懂的字直接問：「What does … mean?」；想用中文問先說「Chinese please」")
             .font(.footnote)
             .foregroundStyle(.secondary)
             .multilineTextAlignment(.center)
@@ -162,7 +162,11 @@ private struct RecognizerCaption: View {
     let fallback: String
 
     var body: some View {
-        if listening && !recognizer.partial.isEmpty {
+        if listening && recognizer.transcribing {
+            Label("辨識中…", systemImage: "waveform")
+                .font(.title3)
+                .foregroundStyle(.green)
+        } else if listening && !recognizer.partial.isEmpty {
             Text(recognizer.partial)
                 .font(.title3)
                 .foregroundStyle(.green)

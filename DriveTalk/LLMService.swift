@@ -22,7 +22,7 @@ struct LLMService {
     let apiKey: String
     let model: String
 
-    private static let session: URLSession = {
+    static let session: URLSession = {
         let cfg = URLSessionConfiguration.default
         cfg.timeoutIntervalForRequest = 30
         cfg.waitsForConnectivity = false
@@ -55,15 +55,33 @@ struct LLMService {
             "max_completion_tokens": maxTokens,
         ]
         if json { body["response_format"] = ["type": "json_object"] }
-        req.httpBody = try JSONSerialization.data(withJSONObject: body)
 
-        let (data, resp) = try await Self.session.data(for: req)
-        try Self.check(resp, data)
-        guard let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let choices = obj["choices"] as? [[String: Any]],
-              let message = choices.first?["message"] as? [String: Any],
-              let content = message["content"] as? String else { throw LLMError.badResponse }
-        return content
+        let candidates = Self.reasoningCandidates(for: model)
+        for (i, effort) in candidates.enumerated() {
+            body["reasoning_effort"] = effort
+            req.httpBody = try JSONSerialization.data(withJSONObject: body)
+            do {
+                let (data, resp) = try await Self.session.data(for: req)
+                try Self.check(resp, data)
+                guard let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let choices = obj["choices"] as? [[String: Any]],
+                      let message = choices.first?["message"] as? [String: Any],
+                      let content = message["content"] as? String else { throw LLMError.badResponse }
+                return content
+            } catch LLMError.http(400, let b) where i < candidates.count - 1 && b.lowercased().contains("reasoning") {
+                continue   // this model doesn't accept that effort value — try the next one
+            }
+        }
+        throw LLMError.badResponse
+    }
+
+    /// Reasoning models (gpt-5*, o-series) think before answering, which is slow for conversation.
+    /// Ask for the lowest effort the model accepts; nil = don't send the parameter.
+    static func reasoningCandidates(for model: String) -> [String?] {
+        let m = model.lowercased()
+        let reasoning = m.hasPrefix("gpt-5") || m.hasPrefix("o1") || m.hasPrefix("o3") || m.hasPrefix("o4")
+        guard reasoning, !m.contains("chat") else { return [nil] }
+        return ["minimal", "none", "low", nil]
     }
 
     // MARK: Claude
@@ -191,7 +209,7 @@ struct LLMService {
         return data
     }
 
-    private static func check(_ resp: URLResponse, _ data: Data) throws {
+    static func check(_ resp: URLResponse, _ data: Data) throws {
         guard let http = resp as? HTTPURLResponse else { throw LLMError.badResponse }
         guard (200..<300).contains(http.statusCode) else {
             // Both OpenAI and Anthropic return {"error": {"type"/"code": ..., "message": ...}}

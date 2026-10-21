@@ -2,64 +2,93 @@ import Foundation
 import AVFoundation
 import Speech
 
-/// Forwards microphone buffers (on the audio thread) to the current recognition requests, if any.
+/// Forwards microphone buffers (on the audio thread) to the current recognition request,
+/// and optionally records them to a file (for OpenAI transcription).
 final class BufferRouter: @unchecked Sendable {
     private let lock = NSLock()
-    private var _requests: [SFSpeechAudioBufferRecognitionRequest] = []
+    private var _request: SFSpeechAudioBufferRecognitionRequest?
+    private var _file: AVAudioFile?
 
-    var requests: [SFSpeechAudioBufferRecognitionRequest] {
-        get { lock.lock(); defer { lock.unlock() }; return _requests }
-        set { lock.lock(); _requests = newValue; lock.unlock() }
+    var request: SFSpeechAudioBufferRecognitionRequest? {
+        get { lock.lock(); defer { lock.unlock() }; return _request }
+        set { lock.lock(); _request = newValue; lock.unlock() }
+    }
+
+    var file: AVAudioFile? {
+        get { lock.lock(); defer { lock.unlock() }; return _file }
+        set { lock.lock(); _file = newValue; lock.unlock() }
     }
 
     func append(_ buffer: AVAudioPCMBuffer) {
-        lock.lock(); let rs = _requests; lock.unlock()
-        for r in rs { r.append(buffer) }
+        lock.lock(); let r = _request; let f = _file; lock.unlock()
+        r?.append(buffer)
+        try? f?.write(from: buffer)
     }
 }
 
-/// Hands-free speech recognition (English, optionally English + 中文 at the same time).
+/// Sends a recorded utterance to OpenAI speech-to-text (much better with accents and 中英混講).
+struct OpenAITranscriber {
+    let apiKey: String
+    var model = "gpt-4o-mini-transcribe"
+    /// Words/topic hints that help recognition.
+    var prompt = ""
+
+    func transcribe(_ fileURL: URL) async throws -> String {
+        let boundary = "Boundary-\(UUID().uuidString)"
+        var req = URLRequest(url: URL(string: "https://api.openai.com/v1/audio/transcriptions")!)
+        req.httpMethod = "POST"
+        req.timeoutInterval = 20
+        req.setValue("Bearer \(apiKey.trimmingCharacters(in: .whitespacesAndNewlines))", forHTTPHeaderField: "Authorization")
+        req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+
+        var body = Data()
+        func field(_ name: String, _ value: String) {
+            body.append("--\(boundary)\r\nContent-Disposition: form-data; name=\"\(name)\"\r\n\r\n\(value)\r\n".data(using: .utf8)!)
+        }
+        field("model", model)
+        field("response_format", "json")
+        if !prompt.isEmpty { field("prompt", prompt) }
+        body.append("--\(boundary)\r\nContent-Disposition: form-data; name=\"file\"; filename=\"speech.wav\"\r\nContent-Type: audio/wav\r\n\r\n".data(using: .utf8)!)
+        body.append(try Data(contentsOf: fileURL))
+        body.append("\r\n--\(boundary)--\r\n".data(using: .utf8)!)
+        req.httpBody = body
+
+        let (data, resp) = try await LLMService.session.data(for: req)
+        try LLMService.check(resp, data)
+        guard let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let text = obj["text"] as? String else { throw LLMError.badResponse }
+        return text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
+/// Hands-free speech recognition.
 /// The audio engine keeps running for the whole session (this also keeps the app alive in the
-/// background / with the screen locked); each `listen()` call creates new recognition requests
-/// and returns when the user stops talking for `silenceTimeout` seconds.
+/// background / with the screen locked). Apple's recognizer gives live captions and detects when
+/// the user stops talking; optionally the recorded audio is then sent to OpenAI for a more
+/// accurate transcript.
 @MainActor
 final class SpeechRecognizer: ObservableObject {
     @Published private(set) var partial = ""
     @Published private(set) var lastError: String?
+    /// True while waiting for the OpenAI transcript.
+    @Published private(set) var transcribing = false
 
-    var silenceTimeout: TimeInterval = 1.8
+    var silenceTimeout: TimeInterval = 1.5
     var noSpeechTimeout: TimeInterval = 20
-    /// Also run a zh-TW recognizer so the user can ask questions in Chinese.
-    var bilingual = false
+    /// false = use Apple's servers (more accurate); true = on-device only (faster, offline).
+    var onDeviceOnly = false
+    /// Words that are likely to be said (scenario terms, vocab book…) — improves recognition.
+    var hints: [String] = []
 
-    /// One recognizer + request + task for one language.
-    private final class Channel {
-        let locale: String
-        let request: SFSpeechAudioBufferRecognitionRequest
-        var task: SFSpeechRecognitionTask?
-        var text = ""
-        var confidence: Float = 0
-        var done = false
-        init(locale: String, request: SFSpeechAudioBufferRecognitionRequest) {
-            self.locale = locale
-            self.request = request
-        }
-    }
-
-    private let recognizers: [String: SFSpeechRecognizer] = {
-        var d: [String: SFSpeechRecognizer] = [:]
-        for id in ["en-US", "zh-TW"] {
-            if let r = SFSpeechRecognizer(locale: Locale(identifier: id)) { d[id] = r }
-        }
-        return d
-    }()
+    private var recognizers: [String: SFSpeechRecognizer] = [:]
     private let engine = AVAudioEngine()
     private let router = BufferRouter()
-    private var channels: [Channel] = []
+    private var task: SFSpeechRecognitionTask?
     private var timer: Timer?
     private var continuation: CheckedContinuation<String, Never>?
     private var generation = 0
-    private var finalizing = false
+    private var heardSomething = false
+    private var recordingURL: URL?
     private var configObserver: NSObjectProtocol?
     private(set) var engineRunning = false
 
@@ -69,6 +98,13 @@ final class SpeechRecognizer: ObservableObject {
         }
         let micOK = await AVAudioApplication.requestRecordPermission()
         return speechOK && micOK
+    }
+
+    private func recognizer(for locale: String) -> SFSpeechRecognizer? {
+        if let r = recognizers[locale] { return r }
+        let r = SFSpeechRecognizer(locale: Locale(identifier: locale))
+        recognizers[locale] = r
+        return r
     }
 
     // MARK: Engine
@@ -113,14 +149,17 @@ final class SpeechRecognizer: ObservableObject {
     // MARK: Listening
 
     /// Listens for one utterance. Returns "" if nothing was said within `noSpeechTimeout`.
-    func listen() async -> String {
+    /// - Parameters:
+    ///   - locale: "en-US" normally; "zh-TW" for a one-off Chinese question.
+    ///   - transcriber: if set, the recorded audio is re-transcribed by OpenAI (falls back to Apple's text).
+    func listen(locale: String = "en-US", transcriber: OpenAITranscriber? = nil) async -> String {
         finish()
         partial = ""
         lastError = nil
-        finalizing = false
+        heardSomething = false
 
-        guard let en = recognizers["en-US"], en.isAvailable else {
-            lastError = "語音辨識目前無法使用（請確認網路或已下載英文語音辨識模型）"
+        guard let rec = recognizer(for: locale), rec.isAvailable else {
+            lastError = "語音辨識目前無法使用（請確認網路，或到 iOS 設定下載語音辨識語言）"
             return ""
         }
         if !engineRunning {
@@ -130,115 +169,108 @@ final class SpeechRecognizer: ObservableObject {
             }
         }
 
-        var list: [(String, SFSpeechRecognizer)] = [("en-US", en)]
-        if bilingual, let zh = recognizers["zh-TW"], zh.isAvailable { list.append(("zh-TW", zh)) }
+        let req = SFSpeechAudioBufferRecognitionRequest()
+        req.shouldReportPartialResults = true
+        req.addsPunctuation = true
+        req.taskHint = .dictation
+        if !hints.isEmpty { req.contextualStrings = Array(hints.prefix(100)) }
+        if onDeviceOnly && rec.supportsOnDeviceRecognition {
+            req.requiresOnDeviceRecognition = true
+        }
+
+        if transcriber != nil { startRecording() }
 
         generation += 1
         let gen = generation
 
-        return await withCheckedContinuation { cont in
+        let appleText: String = await withCheckedContinuation { cont in
             continuation = cont
-            channels = list.map { pair in
-                let (id, recognizer) = pair
-                let req = SFSpeechAudioBufferRecognitionRequest()
-                req.shouldReportPartialResults = true
-                req.addsPunctuation = true
-                req.taskHint = .dictation
-                if recognizer.supportsOnDeviceRecognition {
-                    req.requiresOnDeviceRecognition = true   // faster, private, no 1-minute limit
-                }
-                return Channel(locale: id, request: req)
-            }
-            router.requests = channels.map(\.request)
-            for (i, ch) in channels.enumerated() {
-                guard let recognizer = recognizers[ch.locale] else { continue }
-                ch.task = recognizer.recognitionTask(with: ch.request,
-                                                     resultHandler: Self.makeHandler(owner: self, generation: gen, index: i))
-            }
-            armTimer(noSpeechTimeout, generation: gen, silence: false)
+            router.request = req
+            task = rec.recognitionTask(with: req, resultHandler: Self.makeHandler(owner: self, generation: gen))
+            armTimer(noSpeechTimeout, generation: gen)
+        }
+
+        let recorded = stopRecording()
+        guard let transcriber, let file = recorded, heardSomething, !Task.isCancelled else {
+            if let recorded { try? FileManager.default.removeItem(at: recorded) }
+            return appleText
+        }
+        transcribing = true
+        defer {
+            transcribing = false
+            try? FileManager.default.removeItem(at: file)
+        }
+        do {
+            try? await Task.sleep(for: .milliseconds(80))   // let the audio thread release the file
+            let text = try await transcriber.transcribe(file)
+            if !text.isEmpty { partial = text }
+            return text.isEmpty ? appleText : text
+        } catch {
+            lastError = "OpenAI 轉文字失敗，改用 iPhone 辨識結果"
+            return appleText
         }
     }
 
-    /// Ends the current turn immediately with whatever was heard so far.
+    /// Ends the current listening turn (the awaiting `listen()` returns what was heard so far).
     func finish() {
-        resolve(with: bestText(final: false))
-    }
-
-    private func resolve(with text: String) {
         timer?.invalidate()
         timer = nil
-        router.requests = []
-        for ch in channels {
-            ch.request.endAudio()
-            ch.task?.cancel()
-        }
-        channels = []
-        finalizing = false
+        router.request?.endAudio()
+        router.request = nil
+        task?.cancel()
+        task = nil
         guard let cont = continuation else { return }
         continuation = nil
-        cont.resume(returning: text.trimmingCharacters(in: .whitespacesAndNewlines))
+        cont.resume(returning: partial.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
-    /// User stopped talking. With one language we're done; with two, wait briefly for the final
-    /// results (which carry confidence scores) and pick the better language.
-    private func endOfSpeech(generation gen: Int) {
-        guard gen == generation, continuation != nil, !finalizing else { return }
-        if channels.count <= 1 {
-            finish()
-            return
-        }
-        finalizing = true
-        router.requests = []
-        for ch in channels { ch.request.endAudio() }
-        Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(900))   // safety deadline
-            guard gen == self.generation, self.finalizing else { return }
-            self.resolve(with: self.bestText(final: true))
-        }
-    }
-
-    private func handle(index: Int, text: String?, isFinal: Bool, confidence: Float, failed: Bool, generation gen: Int) {
-        guard gen == generation, continuation != nil, index < channels.count else { return }
-        let ch = channels[index]
+    private func handle(text: String?, isFinal: Bool, failed: Bool, generation gen: Int) {
+        guard gen == generation, continuation != nil else { return }
         if let text, !text.isEmpty {
-            ch.text = text
-            if isFinal { ch.confidence = confidence }
-            if !finalizing {
-                partial = bestText(final: false)
-                armTimer(silenceTimeout, generation: gen, silence: true)
-            }
+            partial = text
+            heardSomething = true
+            armTimer(silenceTimeout, generation: gen)
         }
-        if isFinal || failed { ch.done = true }
-
-        if finalizing {
-            if channels.allSatisfy(\.done) { resolve(with: bestText(final: true)) }
-        } else if channels.count == 1, isFinal || failed {
-            finish()
-        }
+        if isFinal || failed { finish() }
     }
 
-    /// Picks English or Chinese. While talking: show Chinese only if it clearly is Chinese.
-    /// At the end: compare the recognizers' confidence.
-    private func bestText(final: Bool) -> String {
-        guard let en = channels.first(where: { $0.locale == "en-US" }) else { return partial }
-        guard let zh = channels.first(where: { $0.locale == "zh-TW" }), zh.text.containsChinese else { return en.text }
-        if en.text.isEmpty { return zh.text }
-        if final, zh.confidence > 0 || en.confidence > 0 {
-            return zh.confidence > en.confidence + 0.05 ? zh.text : en.text
-        }
-        // Heuristic before final scores: lots of Chinese characters → Chinese speech.
-        let cjk = zh.text.unicodeScalars.filter { (0x4E00...0x9FFF).contains($0.value) }.count
-        return cjk >= 4 && en.text.split(separator: " ").count <= cjk / 2 ? zh.text : en.text
-    }
-
-    private func armTimer(_ interval: TimeInterval, generation gen: Int, silence: Bool) {
+    private func armTimer(_ interval: TimeInterval, generation gen: Int) {
         timer?.invalidate()
         timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: false) { [weak self] _ in
             Task { @MainActor in
                 guard let self, gen == self.generation else { return }
-                if silence { self.endOfSpeech(generation: gen) } else { self.finish() }
+                self.finish()
             }
         }
+    }
+
+    // MARK: Recording (for OpenAI transcription)
+
+    private func startRecording() {
+        let format = engine.inputNode.outputFormat(forBus: 0)
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("utt-\(UUID().uuidString).wav")
+        let settings: [String: Any] = [
+            AVFormatIDKey: kAudioFormatLinearPCM,
+            AVSampleRateKey: format.sampleRate,
+            AVNumberOfChannelsKey: format.channelCount,
+            AVLinearPCMBitDepthKey: 16,
+            AVLinearPCMIsFloatKey: false,
+            AVLinearPCMIsBigEndianKey: false,
+        ]
+        do {
+            router.file = try AVAudioFile(forWriting: url, settings: settings,
+                                          commonFormat: format.commonFormat, interleaved: format.isInterleaved)
+            recordingURL = url
+        } catch {
+            router.file = nil
+            recordingURL = nil
+        }
+    }
+
+    private func stopRecording() -> URL? {
+        router.file = nil          // releasing the AVAudioFile closes it
+        defer { recordingURL = nil }
+        return recordingURL
     }
 
     // Built in nonisolated context so the closures are not main-actor isolated
@@ -247,17 +279,14 @@ final class SpeechRecognizer: ObservableObject {
         { buffer, _ in router.append(buffer) }
     }
 
-    nonisolated private static func makeHandler(owner: SpeechRecognizer, generation: Int, index: Int)
+    nonisolated private static func makeHandler(owner: SpeechRecognizer, generation: Int)
         -> (SFSpeechRecognitionResult?, Error?) -> Void {
         { [weak owner] result, error in
             let text = result?.bestTranscription.formattedString
             let isFinal = result?.isFinal ?? false
-            let segs = result?.bestTranscription.segments ?? []
-            let conf: Float = segs.isEmpty ? 0 : segs.map(\.confidence).reduce(0, +) / Float(segs.count)
             let failed = error != nil
             Task { @MainActor in
-                owner?.handle(index: index, text: text, isFinal: isFinal, confidence: conf,
-                              failed: failed, generation: generation)
+                owner?.handle(text: text, isFinal: isFinal, failed: failed, generation: generation)
             }
         }
     }
