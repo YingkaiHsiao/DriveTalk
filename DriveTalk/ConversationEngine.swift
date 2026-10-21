@@ -221,6 +221,9 @@ final class ConversationEngine: ObservableObject {
                 chineseNext = true
                 await say("好，請說中文。", language: "zh-TW", settings: s)
                 continue
+            case .translate:
+                await translateLast(settings: s)
+                continue
             case .skip, .normal:
                 break
             }
@@ -416,6 +419,37 @@ final class ConversationEngine: ObservableObject {
         }
     }
 
+    // MARK: Translate the last AI sentence ("translate" / 「翻譯」「什麼意思」)
+
+    private var translationCache: [String: String] = [:]
+
+    /// Says the Chinese translation of the AI's last line, then repeats the English slowly.
+    /// Doesn't touch the conversation history, so the chat simply continues afterwards.
+    private func translateLast(settings s: SettingsStore, repeatEnglish: Bool = true) async {
+        let english = lastReply
+        guard !english.isEmpty else {
+            await say("There's nothing to translate yet.", settings: s)
+            return
+        }
+        var zh = translationCache[english]
+        if zh == nil {
+            phase = .thinking
+            zh = try? await s.makeService().complete(
+                system: "Translate the user's English into natural, spoken Traditional Chinese (Taiwan). Output ONLY the translation.",
+                messages: [LLMMessage(role: "user", content: english)], maxTokens: 300)
+            if let z = zh { translationCache[english] = z }
+        }
+        guard let chinese = zh?.trimmingCharacters(in: .whitespacesAndNewlines), !chinese.isEmpty, !Task.isCancelled else {
+            await say("Sorry, I couldn't translate that.", settings: s)
+            return
+        }
+        messages.append(ChatMessage(role: .assistant, text: "翻譯：\(chinese)"))
+        await say(chinese, language: "zh-TW", settings: s)
+        if repeatEnglish && !Task.isCancelled {
+            await say(english, settings: s, rateScale: 0.85)
+        }
+    }
+
     private func waitIfInterrupted() async {
         // Wait while a phone call / Siri etc. holds the audio.
         while interrupted && !Task.isCancelled {
@@ -501,6 +535,14 @@ final class ConversationEngine: ObservableObject {
                     case .skip, .nextNews:
                         break sentence
                     case .chinese:
+                        attempt -= 1
+                        continue
+                    case .translate:
+                        if !item.zh.isEmpty {
+                            await say(item.zh, language: "zh-TW", settings: s)
+                        } else {
+                            await translateLast(settings: s, repeatEnglish: false)
+                        }
                         attempt -= 1
                         continue
                     case .repeatLast:
@@ -671,7 +713,7 @@ enum ShadowCache {
 // MARK: - Voice commands (hands-free control)
 
 enum VoiceCommand {
-    case end, repeatLast, slower, faster, nextNews, skip, chinese, normal
+    case end, repeatLast, slower, faster, nextNews, skip, chinese, translate, normal
 
     init(_ text: String) {
         let t = text.lowercased()
@@ -689,6 +731,12 @@ enum VoiceCommand {
             self = .faster
         } else if words <= 5 && (t.contains("next news") || t.contains("next story") || t.contains("another story")) {
             self = .nextNews
+        } else if (words <= 5 && (t.contains("translate") || t.contains("translation")
+                                  || t == "what does that mean" || t == "what do you mean"
+                                  || t.contains("in chinese please")))
+                    || (t.containsChinese && t.count <= 12
+                        && (t.contains("翻譯") || t.contains("什麼意思") || t.contains("聽不懂") || t.contains("中文意思"))) {
+            self = .translate
         } else if words <= 3 && t.contains("chinese") && !t.contains("explain") {
             self = .chinese
         } else if words <= 3 && (t == "next" || t == "skip" || t.contains("next one") || t.contains("next sentence")

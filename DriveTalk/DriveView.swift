@@ -7,6 +7,7 @@ struct DriveView: View {
     @State private var showSettings = false
     @State private var showHistory = false
     @State private var showTranscript = false
+    @State private var showHelp = false
 
     private var active: Bool { engine.phase != .idle }
 
@@ -32,9 +33,11 @@ struct DriveView: View {
             .navigationTitle("DriveTalk")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
+                ToolbarItemGroup(placement: .topBarLeading) {
                     Button { showHistory = true } label: { Image(systemName: "clock.arrow.circlepath") }
                         .disabled(active)
+                    Button { showHelp = true } label: { Image(systemName: "questionmark.circle") }
+                        .accessibilityLabel("使用說明")
                 }
                 ToolbarItemGroup(placement: .topBarTrailing) {
                     Button { showTranscript = true } label: { Image(systemName: "text.bubble") }
@@ -45,6 +48,7 @@ struct DriveView: View {
             }
             .onAppear { LLMService.warmUp(settings.provider) }
             .sheet(isPresented: $showSettings) { SettingsView() }
+            .sheet(isPresented: $showHelp) { HelpView() }
             .sheet(isPresented: $showHistory) { HistoryView(store: engine.history) }
             .sheet(isPresented: $showTranscript) { TranscriptView(messages: engine.messages) }
             .sheet(item: $engine.finishedSession) { record in
@@ -149,7 +153,7 @@ struct DriveView: View {
     }
 
     private var voiceCommandHint: some View {
-        Text("請在出發前按下開始，行車中全程用語音。\n語音指令：「repeat」「slow down」「speak faster」「next news」「stop practice」\n不懂的字直接問：「What does … mean?」；想用中文問先說「Chinese please」")
+        Text("請在出發前按下開始，行車中全程用語音。\n語音指令：「repeat」「slow down」「speak faster」「next news」「stop practice」\n不懂的字直接問：「What does … mean?」；聽不懂說「Translate」；想用中文問先說「Chinese please」")
             .font(.footnote)
             .foregroundStyle(.secondary)
             .multilineTextAlignment(.center)

@@ -5,6 +5,7 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var testResult: String?
     @State private var testing = false
+    @State private var showHelp = false
 
     var body: some View {
         NavigationStack {
@@ -137,6 +138,7 @@ struct SettingsView: View {
                 }
 
                 Section {
+                    Button { showHelp = true } label: { Label("使用說明", systemImage: "questionmark.circle") }
                     NavigationLink("模型速度測試") { SpeedTestView() }
                 } footer: {
                     Text("用你的手機與網路實測各模型的回應速度與 token 用量，選出最適合開車對話的模型。")
@@ -147,11 +149,13 @@ struct SettingsView: View {
                     LabeledContent("講慢一點", value: "\"slow down\"")
                     LabeledContent("講快一點", value: "\"speak faster\"")
                     LabeledContent("結束練習", value: "\"stop practice\"")
+                    LabeledContent("翻譯上一句", value: "\"Translate\" 或「翻譯」")
                     LabeledContent("用中文問", value: "\"Chinese please\"")
                     LabeledContent("跳過（跟讀）", value: "\"next\"")
                     LabeledContent("不會說時", value: "\"How do I say…?\"")
                 }
             }
+            .sheet(isPresented: $showHelp) { HelpView() }
             .navigationTitle("設定")
             .toolbar { Button("完成") { dismiss() } }
         }
