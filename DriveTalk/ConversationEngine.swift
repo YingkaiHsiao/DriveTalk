@@ -156,10 +156,12 @@ final class ConversationEngine: ObservableObject {
         }
         if Task.isCancelled { return }
 
+        let seed = Variety.sessionSeed(mode: mode)   // different topic / style / twist every session
         func makeSystem() -> String {
             PromptBuilder.system(mode: mode, scenario: s.scenario, level: s.level,
                                  feedback: s.feedbackEnabled, feedbackLanguage: s.feedbackLanguage,
-                                 article: article, reviewWords: reviewWords, reviewExpressions: reviewExprs)
+                                 article: article, reviewWords: reviewWords, reviewExpressions: reviewExprs,
+                                 sessionSeed: seed)
         }
         var system = makeSystem()
 

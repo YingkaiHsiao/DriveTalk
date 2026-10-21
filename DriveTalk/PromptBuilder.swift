@@ -18,7 +18,7 @@ enum PromptBuilder {
     static func system(mode: PracticeMode, scenario: Scenario?, level: EnglishLevel,
                        feedback: Bool, feedbackLanguage: FeedbackLanguage,
                        article: NewsArticle? = nil, reviewWords: [VocabEntry] = [],
-                       reviewExpressions: [SavedExpression] = []) -> String {
+                       reviewExpressions: [SavedExpression] = [], sessionSeed: String = "") -> String {
         var p = """
         You are DriveTalk, a friendly English speaking partner for a Taiwanese engineer (native Mandarin speaker) \
         practicing spoken English while DRIVING. Everything you say is read aloud by text-to-speech.
@@ -87,6 +87,8 @@ enum PromptBuilder {
 
             """
         }
+
+        if !sessionSeed.isEmpty { p += sessionSeed + "\n\n" }
 
         let feedbackRule: String
         if feedback {

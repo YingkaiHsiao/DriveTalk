@@ -163,19 +163,35 @@ struct StudyService {
     // MARK: Shadowing sentences
 
     func shadowSentences(topic: ShadowTopic, level: EnglishLevel, count: Int) async throws -> [ShadowSentence] {
+        // Different situations + grammar each time, and avoid sentences used recently.
+        let subs = Array(Variety.shadowSubtopics(topic).shuffled().prefix(3))
+        let focus = Array(Variety.grammarFocus.shuffled().prefix(2))
+        let avoid = Variety.recentShadow.suffix(25)
         let system = """
         Create \(count) natural English sentences for shadowing practice (the learner listens and repeats aloud). \
-        Topic: \(topic.prompt). Learner level: \(level.promptDescription)
-        Each sentence 6-16 words, very natural spoken English, useful in real life, varied (statements, questions, \
-        polite requests, common phrases). Avoid rare names and numbers. Respond ONLY with JSON:
-        {"sentences": [{"en": "...", "zh": "<自然的繁體中文意思>"}]}
+        Topic: \(topic.prompt). Situations for this set: \(subs.joined(separator: ", ")). \
+        Include some \(focus.joined(separator: " and ")). Learner level: \(level.promptDescription)
+        Each sentence 6-16 words, very natural spoken English, useful in real life, varied in structure. \
+        Avoid rare names and numbers. Do NOT reuse or closely paraphrase these recent sentences: \
+        \(avoid.isEmpty ? "none" : avoid.joined(separator: " | "))
+        Respond ONLY with JSON: {"sentences": [{"en": "...", "zh": "<自然的繁體中文意思>"}]}
         """
         struct Batch: Decodable { var sentences: [ShadowSentence] }
         let raw = try await service.complete(system: system,
-                                             messages: [LLMMessage(role: "user", content: "Make a new set. Seed: \(Int.random(in: 1...99999))")],
-                                             maxTokens: 900, json: true)
+                                             messages: [LLMMessage(role: "user", content: "Make a new set.")],
+                                             maxTokens: 1100, json: true)
         let b: Batch = try Self.decode(raw)
-        return b.sentences.filter { !$0.en.isEmpty }
+        let seen = Set(Variety.recentShadow.map(Variety.normalized))
+        var out: [ShadowSentence] = []
+        var batchSeen = Set<String>()
+        for s in b.sentences where !s.en.isEmpty {
+            let k = Variety.normalized(s.en)
+            if seen.contains(k) || batchSeen.contains(k) { continue }
+            batchSeen.insert(k)
+            out.append(s)
+        }
+        Variety.rememberShadow(out.map(\.en))
+        return out
     }
 
     // MARK: News article
