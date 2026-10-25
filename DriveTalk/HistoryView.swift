@@ -28,6 +28,7 @@ struct HistoryView: View {
                     }
                 }
             }
+            .themeBackground()
             .navigationTitle("練習紀錄")
             .toolbar { Button("完成") { dismiss() } }
         }

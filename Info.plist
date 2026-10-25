@@ -3,9 +3,9 @@
 <plist version="1.0">
 <dict>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>DriveTalk 需要使用麥克風聆聽你說英文，以進行口說練習。</string>
+	<string>English Mate 需要使用麥克風聆聽你說英文，以進行口說練習。</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
-	<string>DriveTalk 使用語音辨識把你說的英文轉成文字，再交給 AI 回應與糾錯。</string>
+	<string>English Mate 使用語音辨識把你說的英文轉成文字，再交給 AI 回應與糾錯。</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>audio</string>

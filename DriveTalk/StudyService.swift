@@ -162,7 +162,23 @@ struct StudyService {
 
     // MARK: Shadowing sentences
 
-    func shadowSentences(topic: ShadowTopic, level: EnglishLevel, count: Int) async throws -> [ShadowSentence] {
+    /// Translates several English sentences to Chinese in one request.
+    func translateBatch(_ sentences: [String]) async throws -> [String] {
+        guard !sentences.isEmpty else { return [] }
+        let system = """
+        Translate each English sentence into natural spoken Traditional Chinese (Taiwan). \
+        Respond ONLY with JSON: {"zh": ["...", "..."]} in the same order.
+        """
+        struct R: Decodable { var zh: [String] }
+        let raw = try await service.complete(system: system,
+                                             messages: [LLMMessage(role: "user", content: sentences.enumerated().map { "\($0.offset + 1). \($0.element)" }.joined(separator: "\n"))],
+                                             maxTokens: 120 * sentences.count + 100, json: true)
+        let r: R = try Self.decode(raw)
+        return r.zh
+    }
+
+    func shadowSentences(topic: ShadowTopic, level: EnglishLevel, length: ShadowLength = .medium,
+                         count: Int) async throws -> [ShadowSentence] {
         // Different situations + grammar each time, and avoid sentences used recently.
         let subs = Array(Variety.shadowSubtopics(topic).shuffled().prefix(3))
         let focus = Array(Variety.grammarFocus.shuffled().prefix(2))
@@ -171,7 +187,7 @@ struct StudyService {
         Create \(count) natural English sentences for shadowing practice (the learner listens and repeats aloud). \
         Topic: \(topic.prompt). Situations for this set: \(subs.joined(separator: ", ")). \
         Include some \(focus.joined(separator: " and ")). Learner level: \(level.promptDescription)
-        Each sentence 6-16 words, very natural spoken English, useful in real life, varied in structure. \
+        Each sentence \(length.words) words long, very natural spoken English, useful in real life, varied in structure. \
         Avoid rare names and numbers. Do NOT reuse or closely paraphrase these recent sentences: \
         \(avoid.isEmpty ? "none" : avoid.joined(separator: " | "))
         Respond ONLY with JSON: {"sentences": [{"en": "...", "zh": "<自然的繁體中文意思>"}]}

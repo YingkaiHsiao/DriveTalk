@@ -12,7 +12,7 @@ struct DriveTalkApp: App {
                 .environmentObject(settings)
                 .environmentObject(engine)
                 .environmentObject(router)
-                .preferredColorScheme(.dark)   // easier on the eyes in the car
+                .tint(Theme.accent)   // follows the iPhone light / dark setting
         }
     }
 }

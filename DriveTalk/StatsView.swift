@@ -18,6 +18,7 @@ struct StatsView: View {
                 }
                 .padding()
             }
+            .background(AppBackground())
             .navigationTitle("學習統計")
         }
     }
@@ -140,8 +141,7 @@ private struct StatTile: View {
             Text(detail).font(.caption2).foregroundStyle(.secondary).lineLimit(2)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(12)
-        .background(Color.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
+        .themeCard(padding: 12)
     }
 }
 
@@ -154,7 +154,7 @@ private struct FlowWords: View {
                 Text(w)
                     .font(.caption)
                     .padding(.horizontal, 10).padding(.vertical, 4)
-                    .background(Color.blue.opacity(0.2), in: Capsule())
+                    .background(Theme.chip, in: Capsule())
             }
         }
     }

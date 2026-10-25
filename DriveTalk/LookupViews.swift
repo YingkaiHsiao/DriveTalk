@@ -27,7 +27,7 @@ struct WordDetailContent: View {
                     Text(info.partOfSpeech)
                         .font(.caption.bold())
                         .padding(.horizontal, 8).padding(.vertical, 2)
-                        .background(Color.blue.opacity(0.2), in: Capsule())
+                        .background(Theme.chip, in: Capsule())
                 }
             }
             Text(info.meaningZh).font(.title3.weight(.semibold))
@@ -55,7 +55,7 @@ struct WordDetailContent: View {
             if !info.note.isEmpty {
                 Label(info.note, systemImage: "lightbulb.fill")
                     .font(.callout)
-                    .foregroundStyle(.yellow)
+                    .foregroundStyle(Theme.tip)
             }
 
             Button {
@@ -162,6 +162,7 @@ struct LookupView: View {
                 default: AskPane()
                 }
             }
+            .themeBackground()
             .navigationTitle("查詢")
             .navigationBarTitleDisplayMode(.inline)
         }
@@ -305,7 +306,7 @@ private struct TranslatePane: View {
                         if !r.notes.isEmpty {
                             Label(r.notes, systemImage: "lightbulb.fill")
                                 .font(.callout)
-                                .foregroundStyle(.yellow)
+                                .foregroundStyle(Theme.tip)
                         }
                         if !resultForEnglish {
                             Button { pron.speak(input) } label: { Label("朗讀英文原文", systemImage: "speaker.wave.2") }
@@ -313,8 +314,7 @@ private struct TranslatePane: View {
                         }
                     }
                     .textSelection(.enabled)
-                    .padding()
-                    .background(Color.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
+                    .themeCard()
                 }
             }
             .padding(.horizontal)
@@ -410,7 +410,7 @@ private struct GrammarPane: View {
                             }
                         }
                         if !r.summaryZh.isEmpty {
-                            Label(r.summaryZh, systemImage: "lightbulb.fill").font(.callout).foregroundStyle(.yellow)
+                            Label(r.summaryZh, systemImage: "lightbulb.fill").font(.callout).foregroundStyle(Theme.tip)
                         }
                         if !r.issues.isEmpty || r.natural != checked {
                             Button {
@@ -426,8 +426,7 @@ private struct GrammarPane: View {
                         }
                     }
                     .textSelection(.enabled)
-                    .padding()
-                    .background(Color.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
+                    .themeCard()
                 }
             }
             .padding(.horizontal)
@@ -515,8 +514,7 @@ private struct AskPane: View {
                         }
                     }
                     .textSelection(.enabled)
-                    .padding()
-                    .background(Color.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
+                    .themeCard()
                 } else if !loading {
                     Text("例如：").font(.callout).foregroundStyle(.secondary)
                     ForEach(samples, id: \.self) { q in

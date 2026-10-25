@@ -10,6 +10,8 @@ struct SavedExpression: Identifiable, Codable, Hashable {
     var date: Date = Date()
     var practiced: Int = 0
     var review = ReviewState()
+    /// Chinese meaning (filled in the first time it's used for shadowing).
+    var zh: String?
 }
 
 struct DayStat: Codable {
@@ -117,6 +119,13 @@ final class ProgressStore: ObservableObject {
     func gradeExpression(_ id: UUID, _ g: ReviewState.Grade) {
         if let i = expressions.firstIndex(where: { $0.id == id }) {
             expressions[i].review.grade(g)
+            save()
+        }
+    }
+
+    func setChinese(_ zh: String, for id: UUID) {
+        if let i = expressions.firstIndex(where: { $0.id == id }) {
+            expressions[i].zh = zh
             save()
         }
     }

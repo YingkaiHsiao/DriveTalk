@@ -20,7 +20,10 @@ final class ConversationEngine: ObservableObject {
         }
     }
 
-    @Published private(set) var phase: Phase = .idle
+    @Published private(set) var phase: Phase = .idle {
+        // Background music gets quieter while it's the user's turn to speak.
+        didSet { if phase != oldValue { MusicPlayer.shared.setDucked(phase == .listening) } }
+    }
     @Published private(set) var messages: [ChatMessage] = []
     @Published private(set) var errorText: String?
     @Published var finishedSession: SessionRecord?
@@ -41,6 +44,13 @@ final class ConversationEngine: ObservableObject {
     private var usedNewsLinks: Set<String> = []
     /// Title shown on screen for the current session (e.g. the news headline).
     @Published private(set) var sessionSubtitle: String?
+
+    /// Shadowing: the sentence (or word) to repeat — stays on screen while the user speaks.
+    struct ShadowTarget: Equatable {
+        var en: String
+        var zh: String
+    }
+    @Published private(set) var shadowTarget: ShadowTarget?
 
     var isRunning: Bool { loopTask != nil }
 
@@ -85,7 +95,7 @@ final class ConversationEngine: ObservableObject {
             return
         }
         guard await SpeechRecognizer.requestPermissions() else {
-            errorText = "需要「麥克風」與「語音辨識」權限，請到 iOS 設定 > DriveTalk 開啟"
+            errorText = "需要「麥克風」與「語音辨識」權限，請到 iOS 設定 > English Mate 開啟"
             return
         }
         do {
@@ -113,6 +123,11 @@ final class ConversationEngine: ObservableObject {
         pendingArticle = nil
         pendingShadowSaved = false
         configureRecognition(settings: s, article: article)
+        if s.musicEnabled {
+            let style = MusicPlayer.style(for: mode, scenario: s.scenario, preferred: s.musicStyle)
+            let volume = s.musicVolume
+            Task { await MusicPlayer.shared.start(style: style, volume: volume) }
+        }
 
         if mode == .shadowing {
             await runShadowing(settings: s, savedOnly: shadowSaved || s.shadowTopic == .saved)
@@ -161,7 +176,7 @@ final class ConversationEngine: ObservableObject {
             PromptBuilder.system(mode: mode, scenario: s.scenario, level: s.level,
                                  feedback: s.feedbackEnabled, feedbackLanguage: s.feedbackLanguage,
                                  article: article, reviewWords: reviewWords, reviewExpressions: reviewExprs,
-                                 sessionSeed: seed)
+                                 sessionSeed: seed, driving: s.usageContext == .driving)
         }
         var system = makeSystem()
 
@@ -173,7 +188,7 @@ final class ConversationEngine: ObservableObject {
             if Task.isCancelled { break }
 
             phase = .listening
-            let heard = await listenOnce(settings: s, chinese: chineseNext)
+            let heard = await listenTurn(settings: s, chinese: chineseNext)
             chineseNext = false
             if Task.isCancelled { break }
 
@@ -397,6 +412,36 @@ final class ConversationEngine: ObservableObject {
             "(write Chinese in Traditional characters). Terms: " + hints.prefix(40).joined(separator: ", ")
     }
 
+    // MARK: On-screen controls (everyday mode)
+
+    private var pendingCommand: VoiceCommand?
+
+    /// "說完了": end the user's turn now instead of waiting for silence.
+    func endUserTurn() {
+        if phase == .listening { recognizer.finish() }
+    }
+
+    /// "略過": stop the AI talking and go straight to the user's turn.
+    func skipSpeech() {
+        speechItems.removeAll()
+        speaker.stop()
+    }
+
+    /// Same as saying the voice command (Translate / Repeat / Next / Stop practice).
+    func send(_ command: VoiceCommand) {
+        pendingCommand = command
+        if phase == .listening { recognizer.finish() }
+        if phase == .speaking { skipSpeech() }
+    }
+
+    /// One user turn: a tapped on-screen command wins over what was heard.
+    private func listenTurn(settings s: SettingsStore, chinese: Bool = false) async -> String {
+        if let c = pendingCommand { pendingCommand = nil; return c.phrase }
+        let heard = await listenOnce(settings: s, chinese: chinese)
+        if let c = pendingCommand { pendingCommand = nil; return c.phrase }
+        return heard
+    }
+
     private func listenOnce(settings s: SettingsStore, chinese: Bool = false) async -> String {
         recognizer.silenceTimeout = s.silenceTimeout
         let transcriber: OpenAITranscriber? = (s.speechEngine == .openAI && !s.openAIKey.isEmpty)
@@ -462,31 +507,48 @@ final class ConversationEngine: ObservableObject {
 
     private func runShadowing(settings s: SettingsStore, savedOnly: Bool) async {
         var first = true
+        let usesQueue = !(s.useOpenAITTS && !s.openAIKey.isEmpty)
         while !Task.isCancelled {
             var items: [(en: String, zh: String, exprID: UUID?)] = []
             let saved = ProgressStore.shared.expressionsForPractice(limit: savedOnly ? 10 : 3)
-            items += saved.map { (en: $0.better, zh: "", exprID: UUID?.some($0.id)) }
+            items += saved.map { (en: $0.better, zh: $0.zh ?? "", exprID: UUID?.some($0.id)) }
             if !savedOnly {
                 // Use sentences prepared in advance (instant start), and prepare the next batch in the background.
-                var batch = ShadowCache.take(topic: s.shadowTopic, level: s.level, count: 8)
+                let topic = s.shadowTopic, level = s.level, length = s.shadowLength
+                var batch = ShadowCache.take(topic: topic, level: level, length: length, count: 8)
                 if batch.count < 4 {
                     phase = .thinking
                     do {
-                        batch += try await StudyService(settings: s).shadowSentences(topic: s.shadowTopic, level: s.level, count: 8)
+                        batch += try await StudyService(settings: s).shadowSentences(topic: topic, level: level,
+                                                                                     length: length, count: 8)
                     } catch {
                         errorText = error.localizedDescription
                     }
                 }
                 items += batch.map { (en: $0.en, zh: $0.zh, exprID: UUID?.none) }
-                let topic = s.shadowTopic, level = s.level
                 Task { [weak s] in
-                    guard let s, ShadowCache.count(topic: topic, level: level) < 8 else { return }
-                    if let more = try? await StudyService(settings: s).shadowSentences(topic: topic, level: level, count: 12) {
-                        ShadowCache.add(more, topic: topic, level: level)
+                    guard let s, ShadowCache.count(topic: topic, level: level, length: length) < 8 else { return }
+                    if let more = try? await StudyService(settings: s).shadowSentences(topic: topic, level: level,
+                                                                                       length: length, count: 12) {
+                        ShadowCache.add(more, topic: topic, level: level, length: length)
                     }
                 }
             }
             if Task.isCancelled { return }
+
+            // Fill in any missing Chinese meanings (e.g. saved expressions) with ONE request.
+            if s.shadowSayChinese {
+                let missing = items.indices.filter { items[$0].zh.isEmpty }
+                if !missing.isEmpty,
+                   let zhs = try? await StudyService(settings: s).translateBatch(missing.map { items[$0].en }),
+                   zhs.count == missing.count {
+                    for (k, i) in missing.enumerated() {
+                        items[i].zh = zhs[k]
+                        if let id = items[i].exprID { ProgressStore.shared.setChinese(zhs[k], for: id) }
+                    }
+                }
+            }
+
             if items.isEmpty {
                 if savedOnly {
                     errorText = "還沒有存下的表達方式：開啟即時糾錯練習對話，或用「查詢 > 文法修正」收集"
@@ -504,29 +566,36 @@ final class ConversationEngine: ObservableObject {
             for item in items {
                 if Task.isCancelled { return }
                 sessionSubtitle = item.en
+                shadowTarget = ShadowTarget(en: item.en, zh: item.zh)
                 messages.append(ChatMessage(role: .assistant, text: item.zh.isEmpty ? item.en : "\(item.en)\n\(item.zh)"))
                 lastReply = item.en
                 var best = 0
                 var attempt = 0
-                sentence: while attempt < 3 && !Task.isCancelled {
+                var failures = 0
+                var drilled = false
+                let maxAttempts = max(1, s.shadowMaxAttempts)
+
+                sentence: while attempt < maxAttempts && !Task.isCancelled {
                     attempt += 1
                     await waitIfInterrupted()
-                    if attempt == 1, s.shadowSayChinese, !item.zh.isEmpty, !(s.useOpenAITTS && !s.openAIKey.isEmpty) {
-                        // Queue English + Chinese together so there is no pause between them.
+
+                    // Play the sentence (+ Chinese meaning) back-to-back with no pause.
+                    let sayZh = s.shadowSayChinese && !item.zh.isEmpty && (attempt == 1 || s.shadowChineseEveryTime)
+                    if usesQueue {
                         phase = .speaking
-                        await speaker.speakSequence([(text: item.en, language: "en-US"), (text: item.zh, language: "zh-TW")],
-                                                    rate: Float(s.speechRate * 0.9))
+                        var segs: [(text: String, language: String)] = [(text: item.en, language: "en-US")]
+                        if sayZh { segs.append((text: item.zh, language: "zh-TW")) }
+                        await speaker.speakSequence(segs, rate: Float(s.speechRate * 0.9))
                     } else {
                         await say(item.en, settings: s, rateScale: 0.9)
-                        if attempt == 1, s.shadowSayChinese, !item.zh.isEmpty {
-                            await say(item.zh, language: "zh-TW", settings: s)
-                        }
+                        if sayZh { await say(item.zh, language: "zh-TW", settings: s) }
                     }
                     if Task.isCancelled { return }
+
                     phase = .listening
-                    let heard = await listenOnce(settings: s)
+                    let heard = await listenTurn(settings: s)
                     if Task.isCancelled { return }
-                    if heard.isEmpty { continue }   // silence: play it again
+                    if heard.isEmpty { continue }   // silence: play it again (counts as a try)
 
                     switch VoiceCommand(heard) {
                     case .end:
@@ -534,7 +603,7 @@ final class ConversationEngine: ObservableObject {
                         return
                     case .skip, .nextNews:
                         break sentence
-                    case .chinese:
+                    case .chinese, .repeatLast:
                         attempt -= 1
                         continue
                     case .translate:
@@ -543,9 +612,6 @@ final class ConversationEngine: ObservableObject {
                         } else {
                             await translateLast(settings: s, repeatEnglish: false)
                         }
-                        attempt -= 1
-                        continue
-                    case .repeatLast:
                         attempt -= 1
                         continue
                     case .slower:
@@ -570,7 +636,22 @@ final class ConversationEngine: ObservableObject {
                     if result.score >= 85 {
                         await say(result.score >= 98 ? "Perfect!" : ["Great!", "Nice job!", "Very good!"].randomElement()!, settings: s)
                         break sentence
-                    } else if attempt < 3 {
+                    }
+                    failures += 1
+
+                    // Word-by-word drill after N failed tries, then one more full try.
+                    if !drilled, s.shadowWordDrillAfter > 0, failures >= s.shadowWordDrillAfter {
+                        drilled = true
+                        let words = s.shadowDrillAllWords ? ShadowScorer.words(item.en) : result.missed
+                        let ok = await wordDrill(words, settings: s)
+                        if !ok { return }   // stopped
+                        shadowTarget = ShadowTarget(en: item.en, zh: item.zh)
+                        await say("Now the whole sentence again.", settings: s)
+                        attempt = min(attempt, maxAttempts - 1)   // guarantee one more full try
+                        continue
+                    }
+
+                    if attempt < maxAttempts {
                         let hint = result.missed.prefix(3).joined(separator: ", ")
                         await say(hint.isEmpty ? "Almost! One more time." : "Almost! Listen for: \(hint). Again.", settings: s)
                     } else {
@@ -583,6 +664,33 @@ final class ConversationEngine: ObservableObject {
             if Task.isCancelled { return }
             await say(savedOnly ? "That's all your saved expressions. Let's go through them again." : "Nice work! Here come more sentences.", settings: s)
         }
+    }
+
+    /// Repeat-after-me for single words (up to 2 tries each). Returns false if the user said "stop practice".
+    private func wordDrill(_ words: [String], settings s: SettingsStore) async -> Bool {
+        let list = Array(NSOrderedSet(array: words.filter { $0.count > 1 || $0 == "i" || $0 == "a" })) as? [String] ?? words
+        guard !list.isEmpty else { return true }
+        await say("Let's practice word by word.", settings: s)
+        for w in list {
+            if Task.isCancelled { return false }
+            for tryNo in 1...2 {
+                sessionSubtitle = "逐字：\(w)"
+                shadowTarget = ShadowTarget(en: w, zh: "")
+                await say(w, settings: s, rateScale: 0.75)
+                phase = .listening
+                let heard = await listenTurn(settings: s)
+                if Task.isCancelled { return false }
+                let cmd = VoiceCommand(heard)
+                if cmd == .end { await say("Okay, great practice today!", settings: s); return false }
+                if cmd == .skip { break }
+                let ok = ShadowScorer.score(target: w, heard: heard).score >= 100
+                messages.append(ChatMessage(role: .user, text: heard.isEmpty ? "（沒有聽到）" : heard,
+                                            feedback: "逐字「\(w)」" + (ok ? " ✓" : " ✗")))
+                if ok { break }
+                if tryNo == 2 { await say("Okay, next word.", settings: s) }
+            }
+        }
+        return true
     }
 
     // MARK: News helpers
@@ -651,6 +759,7 @@ final class ConversationEngine: ObservableObject {
         case .ended:
             try? AudioSessionManager.activate()
             recognizer.restartEngine()
+            MusicPlayer.shared.resumeIfNeeded()
             interrupted = false
         @unknown default:
             break
@@ -658,6 +767,9 @@ final class ConversationEngine: ObservableObject {
     }
 
     private func cleanup() {
+        shadowTarget = nil
+        pendingCommand = nil
+        MusicPlayer.shared.stop()
         recognizer.stopEngine()
         speaker.stop()
         AudioSessionManager.deactivate()
@@ -679,8 +791,8 @@ private final class TurnState {
 
 @MainActor
 enum ShadowCache {
-    private static func key(_ topic: ShadowTopic, _ level: EnglishLevel) -> String {
-        "shadowCache|\(topic.rawValue)|\(level.rawValue)"
+    private static func key(_ topic: ShadowTopic, _ level: EnglishLevel, _ length: ShadowLength) -> String {
+        "shadowCache|\(topic.rawValue)|\(level.rawValue)|\(length.rawValue)"
     }
 
     private static func load(_ k: String) -> [ShadowSentence] {
@@ -693,10 +805,12 @@ enum ShadowCache {
         if let data = try? JSONEncoder().encode(list) { UserDefaults.standard.set(data, forKey: k) }
     }
 
-    static func count(topic: ShadowTopic, level: EnglishLevel) -> Int { load(key(topic, level)).count }
+    static func count(topic: ShadowTopic, level: EnglishLevel, length: ShadowLength) -> Int {
+        load(key(topic, level, length)).count
+    }
 
-    static func take(topic: ShadowTopic, level: EnglishLevel, count: Int) -> [ShadowSentence] {
-        let k = key(topic, level)
+    static func take(topic: ShadowTopic, level: EnglishLevel, length: ShadowLength, count: Int) -> [ShadowSentence] {
+        let k = key(topic, level, length)
         var list = load(k)
         let taken = Array(list.prefix(count))
         list.removeFirst(taken.count)
@@ -704,8 +818,8 @@ enum ShadowCache {
         return taken
     }
 
-    static func add(_ more: [ShadowSentence], topic: ShadowTopic, level: EnglishLevel) {
-        let k = key(topic, level)
+    static func add(_ more: [ShadowSentence], topic: ShadowTopic, level: EnglishLevel, length: ShadowLength) {
+        let k = key(topic, level, length)
         store(Array((load(k) + more).suffix(40)), k)
     }
 }
@@ -744,6 +858,23 @@ enum VoiceCommand {
             self = .skip
         } else {
             self = .normal
+        }
+    }
+}
+
+extension VoiceCommand {
+    /// A phrase that VoiceCommand(_:) maps back to this command.
+    var phrase: String {
+        switch self {
+        case .end: return "stop practice"
+        case .repeatLast: return "repeat"
+        case .slower: return "slow down"
+        case .faster: return "speak faster"
+        case .nextNews: return "next news"
+        case .skip: return "next"
+        case .chinese: return "chinese please"
+        case .translate: return "translate"
+        case .normal: return ""
         }
     }
 }

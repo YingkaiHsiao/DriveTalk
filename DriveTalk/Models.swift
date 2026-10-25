@@ -57,6 +57,38 @@ enum SpeechEngine: String, CaseIterable, Identifiable, Codable {
     var id: String { rawValue }
 }
 
+enum ShadowLength: String, CaseIterable, Identifiable, Codable {
+    case short = "短句（3–7 字）"
+    case medium = "中等（7–12 字）"
+    case long = "長句（12–20 字）"
+    var id: String { rawValue }
+    var words: String {
+        switch self {
+        case .short: return "3-7"
+        case .medium: return "7-12"
+        case .long: return "12-20"
+        }
+    }
+}
+
+enum MusicStyle: String, CaseIterable, Identifiable, Codable {
+    case auto = "依情境自動"
+    case lofi = "輕鬆 Lo-fi"
+    case focus = "專注（工作）"
+    case news = "新聞節奏"
+    case travel = "旅行輕快"
+    case calm = "平靜（跟讀）"
+    var id: String { rawValue }
+}
+
+/// Where the user practices: driving = strict voice-only rules; everyday = can look at the screen.
+enum UsageContext: String, CaseIterable, Identifiable, Codable {
+    case driving = "開車"
+    case everyday = "一般"
+    var id: String { rawValue }
+    var icon: String { self == .driving ? "car.fill" : "figure.walk" }
+}
+
 enum FeedbackLanguage: String, CaseIterable, Identifiable, Codable {
     case english = "English"
     case chinese = "繁體中文"

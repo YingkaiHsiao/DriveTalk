@@ -56,6 +56,20 @@ final class SettingsStore: ObservableObject {
     @Published var shadowTopic: ShadowTopic { didSet { d.set(shadowTopic.rawValue, forKey: "shadowTopic") } }
     /// In shadowing, also read the Chinese meaning of each sentence.
     @Published var shadowSayChinese: Bool { didSet { d.set(shadowSayChinese, forKey: "shadowSayChinese") } }
+    /// Say the Chinese meaning every time the sentence is replayed (not only the first time).
+    @Published var shadowChineseEveryTime: Bool { didSet { d.set(shadowChineseEveryTime, forKey: "shadowChineseEveryTime") } }
+    @Published var shadowLength: ShadowLength { didSet { d.set(shadowLength.rawValue, forKey: "shadowLength") } }
+    /// Tries per sentence before moving on.
+    @Published var shadowMaxAttempts: Int { didSet { d.set(shadowMaxAttempts, forKey: "shadowMaxAttempts") } }
+    /// After this many failed tries, practice the missed words one by one (0 = off).
+    @Published var shadowWordDrillAfter: Int { didSet { d.set(shadowWordDrillAfter, forKey: "shadowWordDrillAfter") } }
+    /// Word drill covers every word of the sentence (true) or only the missed words (false).
+    @Published var shadowDrillAllWords: Bool { didSet { d.set(shadowDrillAllWords, forKey: "shadowDrillAllWords") } }
+
+    @Published var usageContext: UsageContext { didSet { d.set(usageContext.rawValue, forKey: "usageContext") } }
+    @Published var musicEnabled: Bool { didSet { d.set(musicEnabled, forKey: "musicEnabled") } }
+    @Published var musicStyle: MusicStyle { didSet { d.set(musicStyle.rawValue, forKey: "musicStyle") } }
+    @Published var musicVolume: Double { didSet { d.set(musicVolume, forKey: "musicVolume") } }
     @Published var level: EnglishLevel { didSet { d.set(level.rawValue, forKey: "level") } }
     @Published var feedbackEnabled: Bool { didSet { d.set(feedbackEnabled, forKey: "feedbackEnabled") } }
     @Published var feedbackLanguage: FeedbackLanguage { didSet { d.set(feedbackLanguage.rawValue, forKey: "feedbackLanguage") } }
@@ -84,6 +98,15 @@ final class SettingsStore: ObservableObject {
         appleServerRecognition = d.object(forKey: "appleServerRecognition") as? Bool ?? true
         shadowTopic = ShadowTopic(rawValue: d.string(forKey: "shadowTopic") ?? "") ?? .work
         shadowSayChinese = d.object(forKey: "shadowSayChinese") as? Bool ?? true
+        shadowChineseEveryTime = d.object(forKey: "shadowChineseEveryTime") as? Bool ?? false
+        shadowLength = ShadowLength(rawValue: d.string(forKey: "shadowLength") ?? "") ?? .medium
+        shadowMaxAttempts = d.object(forKey: "shadowMaxAttempts") as? Int ?? 3
+        shadowWordDrillAfter = d.object(forKey: "shadowWordDrillAfter") as? Int ?? 2
+        shadowDrillAllWords = d.object(forKey: "shadowDrillAllWords") as? Bool ?? false
+        usageContext = UsageContext(rawValue: d.string(forKey: "usageContext") ?? "") ?? .driving
+        musicEnabled = d.object(forKey: "musicEnabled") as? Bool ?? false
+        musicStyle = MusicStyle(rawValue: d.string(forKey: "musicStyle") ?? "") ?? .auto
+        musicVolume = d.object(forKey: "musicVolume") as? Double ?? 0.35
         level = EnglishLevel(rawValue: d.string(forKey: "level") ?? "") ?? .intermediate
         feedbackEnabled = d.object(forKey: "feedbackEnabled") as? Bool ?? true
         feedbackLanguage = FeedbackLanguage(rawValue: d.string(forKey: "feedbackLanguage") ?? "") ?? .english

@@ -6,6 +6,7 @@ struct SettingsView: View {
     @State private var testResult: String?
     @State private var testing = false
     @State private var showHelp = false
+    @ObservedObject private var music = MusicPlayer.shared
 
     var body: some View {
         NavigationStack {
@@ -54,6 +55,19 @@ struct SettingsView: View {
                     Text("API Key 只存在本機 iOS 鑰匙圈，直接連到 OpenAI / Anthropic / Google，不經過其他伺服器。開車對話建議用速度快的小模型。")
                 }
 
+                Section {
+                    Picker("使用情境", selection: $settings.usageContext) {
+                        ForEach(UsageContext.allCases) { Text($0 == .driving ? "開車練習" : "一般練習").tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                } header: {
+                    Text("使用情境")
+                } footer: {
+                    Text(settings.usageContext == .driving
+                         ? "開車：AI 回覆更短、完全不要求你看螢幕，畫面只顯示必要資訊。"
+                         : "一般（在家、散步、休息時）：AI 回覆可以稍長一點，練習時畫面有「說完了／略過／重播／翻譯／下一句」按鈕。")
+                }
+
                 Section("練習內容") {
                     Picker("模式", selection: $settings.mode) {
                         ForEach(PracticeMode.allCases) { Text($0.rawValue).tag($0) }
@@ -62,7 +76,22 @@ struct SettingsView: View {
                         Picker("跟讀主題", selection: $settings.shadowTopic) {
                             ForEach(ShadowTopic.allCases) { Text($0.rawValue).tag($0) }
                         }
+                        Picker("句子長度", selection: $settings.shadowLength) {
+                            ForEach(ShadowLength.allCases) { Text($0.rawValue).tag($0) }
+                        }
                         Toggle("每句也唸中文意思", isOn: $settings.shadowSayChinese)
+                        if settings.shadowSayChinese {
+                            Toggle("每次重播都唸中文", isOn: $settings.shadowChineseEveryTime)
+                        }
+                        Stepper("每句最多嘗試 \(settings.shadowMaxAttempts) 次", value: $settings.shadowMaxAttempts, in: 1...6)
+                        Stepper(settings.shadowWordDrillAfter == 0 ? "逐字練習：關閉" : "失敗 \(settings.shadowWordDrillAfter) 次後逐字練習",
+                                value: $settings.shadowWordDrillAfter, in: 0...5)
+                        if settings.shadowWordDrillAfter > 0 {
+                            Picker("逐字範圍", selection: $settings.shadowDrillAllWords) {
+                                Text("只練沒唸到的字").tag(false)
+                                Text("整句每個字").tag(true)
+                            }
+                        }
                     }
                     if settings.mode == .news {
                         Picker("新聞類別", selection: $settings.newsCategory) {
@@ -90,6 +119,26 @@ struct SettingsView: View {
                     Text("糾錯")
                 } footer: {
                     Text("每次你說完，若有明顯的文法或用字問題，AI 會先唸一句更自然的說法，再繼續對話；修正會自動收進「表達方式」。")
+                }
+
+                Section {
+                    Toggle("練習時播放背景音樂", isOn: $settings.musicEnabled)
+                    if settings.musicEnabled {
+                        Picker("音樂風格", selection: $settings.musicStyle) {
+                            ForEach(MusicStyle.allCases) { Text($0.rawValue).tag($0) }
+                        }
+                        VStack(alignment: .leading) {
+                            Text("音量：\(Int(settings.musicVolume * 100))%")
+                            Slider(value: $settings.musicVolume, in: 0.05...1.0)
+                        }
+                        Button(music.isPreviewing ? "停止試聽" : "試聽") {
+                            music.togglePreview(style: settings.musicStyle, volume: settings.musicVolume)
+                        }
+                    }
+                } header: {
+                    Text("背景音樂")
+                } footer: {
+                    Text("App 內即時產生的輕音樂（無版權問題、不用網路）。「依情境自動」會依模式與情境選風格。輪到你說話時音樂會自動轉小，避免干擾辨識。")
                 }
 
                 Section {
@@ -156,6 +205,9 @@ struct SettingsView: View {
                 }
             }
             .sheet(isPresented: $showHelp) { HelpView() }
+            .onDisappear { if music.isPreviewing { music.stop() } }
+            .onChange(of: settings.musicVolume) { _, v in if music.isPreviewing { music.setVolume(v) } }
+            .themeBackground()
             .navigationTitle("設定")
             .toolbar { Button("完成") { dismiss() } }
         }

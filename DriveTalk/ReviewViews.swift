@@ -27,6 +27,7 @@ struct VocabView: View {
 
                 if tab == 0 { WordListView() } else { ExpressionListView() }
             }
+            .themeBackground()
             .navigationTitle("生字本")
             .navigationBarTitleDisplayMode(.inline)
             .fullScreenCover(isPresented: $showReview) { SmartReviewView() }
@@ -65,8 +66,7 @@ struct VocabView: View {
                 .disabled(engine.phase != .idle || (vocab.entries.isEmpty && progress.expressions.isEmpty))
             }
         }
-        .padding()
-        .background(Color.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 14))
+        .themeCard()
         .padding()
     }
 }
@@ -181,7 +181,7 @@ private struct ExpressionListView: View {
                                 Text(e.original).font(.callout).strikethrough().foregroundStyle(.secondary)
                             }
                             if !e.note.isEmpty {
-                                Text(e.note).font(.caption).foregroundStyle(.yellow)
+                                Text(e.note).font(.caption).foregroundStyle(Theme.tip)
                             }
                             HStack {
                                 Text("\(e.source)・\(e.date.formatted(date: .abbreviated, time: .omitted))")

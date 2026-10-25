@@ -1,4 +1,6 @@
-# DriveTalk — 開車英文口說練習 App（iOS 18 / SwiftUI）
+# English Mate — 英文口說練習 App（iOS 18 / SwiftUI）
+
+> 開車、在家、散步都能練。專案與程式內部名稱仍為 DriveTalk（不影響使用，保留以免舊資料與 API Key 遺失）。
 
 綁定 OpenAI 或 Claude API，在開車時全程用語音和 AI 對話練英文：AI 開場 → 你說 → (即時糾錯) → AI 回應 → 你說……
 
@@ -52,7 +54,7 @@
 4. GitHub Desktop：**File → Add local repository** → 選這個資料夾 → 出現「not a Git repository」時按 **create a repository** → **Create repository**。
 5. 按 **Publish repository**（取消勾選 Keep this code private 則為 Public）→ Publish。
 6. 回到 GitHub 網頁的 repo → **Actions** 分頁，會看到「Build iOS IPA」正在執行（約 3～6 分鐘）。
-   - 綠色勾勾 ✅：點進去，頁面最下方 **Artifacts** 下載 `DriveTalk-ipa`（下載的是 zip，解壓縮後得到 `DriveTalk.ipa`）。
+   - 綠色勾勾 ✅：點進去，頁面最下方 **Artifacts** 下載 `EnglishMate-ipa`（下載的是 zip，解壓縮後得到 `EnglishMate.ipa`）。
    - 紅色叉叉 ❌：點進去 → 展開「Show compile errors」，把錯誤內容貼給 Claude 修正。
 
 之後每次修改程式，在 GitHub Desktop 按 **Commit to main → Push origin**，就會自動重新編譯。也可以在 Actions 頁面選「Build iOS IPA」→ **Run workflow** 手動重跑。
@@ -63,7 +65,7 @@
 2. 安裝 **Sideloadly**：https://sideloadly.io
 3. iPhone 用 USB 線接電腦，iPhone 上點「信任這部電腦」。
 4. 開 Sideloadly：
-   - 把 `DriveTalk.ipa` 拖進左上角 IPA 圖示
+   - 把 `EnglishMate.ipa` 拖進左上角 IPA 圖示
    - **Apple account** 輸入你的 Apple ID（建議用一個另外註冊的 Apple ID 專門簽 App）
    - 按 **Start** → 輸入密碼與雙重認證碼 → 等待顯示 Done
 5. iPhone 設定：

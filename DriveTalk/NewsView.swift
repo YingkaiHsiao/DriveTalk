@@ -47,6 +47,7 @@ struct NewsView: View {
                 }
             }
             .overlay { if store.loading && store.items.isEmpty { ProgressView("載入新聞…") } }
+            .themeBackground()
             .navigationTitle("新聞短文")
             .refreshable { await store.refresh(settings.newsCategory) }
             .task(id: settings.newsCategory) {

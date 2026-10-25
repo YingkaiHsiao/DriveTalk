@@ -44,6 +44,8 @@ struct HelpView: View {
         Section(title: "快速開始", topics: [
             Topic(title: "第一次設定", icon: "gearshape",
                   body: "練習頁右上角 ⚙️ → 選 AI 服務（OpenAI / Claude / Gemini）→ 貼上 API Key → 按「測試連線」出現 ✅ 即可。模型可用下拉選單選，或選「自訂輸入…」自己打。"),
+            Topic(title: "開車練習 vs 一般練習", icon: "figure.walk",
+                  body: "練習頁最上方（或設定）切換。開車：AI 回覆更短、全程語音、不要求看螢幕。一般（在家、散步、休息）：回覆可以稍長，練習時畫面多了「說完了」（不用等停頓就結束發言）、「略過」（跳過 AI 正在說的話）、「重播」、「翻譯」、「下一句」（跟讀）按鈕。"),
             Topic(title: "開車前怎麼用", icon: "car.fill",
                   body: "停車時選好模式，按「開始練習」，聽到「叮」一聲後放好手機出發。之後全程用說的，不需要看或碰螢幕。螢幕鎖定、接藍牙車機都可以繼續。"),
             Topic(title: "畫面燈號", icon: "circle.fill",
@@ -57,7 +59,7 @@ struct HelpView: View {
             Topic(title: "新聞聽讀討論", icon: "newspaper",
                   body: "AI 先朗讀一篇依你程度改寫的 BBC 新聞，再逐題用語音問你問題。說「Next news」換下一則。也可以在「新聞」分頁按「開車聽＋語音討論」。"),
             Topic(title: "跟讀練習（跟著唸）", icon: "repeat",
-                  body: "AI 唸一句（可加唸中文意思），你跟著唸，手機直接打分數：85 分以上過關，沒過會提示沒唸到的字，最多 3 次。說「Next」跳過、「Translate」聽中文意思。評分在手機上算，不花 token。"),
+                  body: "AI 唸一句（可加唸中文意思），你跟著唸，手機直接打分數：85 分以上過關，沒過會提示沒唸到的字。設定可選句子長短、每句最多嘗試幾次、每次重播都唸中文，以及失敗幾次後「逐字練習」（只練沒唸到的字或整句每個字），逐字練完再唸一次整句。說「Next」跳過、「Translate」聽中文意思。評分在手機上算，不花 token。"),
             Topic(title: "智慧複習（生字＋表達）", icon: "brain.head.profile",
                   body: "AI 用對話考你到期的單字與表達方式，自動判斷答對與否並安排下次複習時間。"),
         ]),
@@ -94,6 +96,8 @@ struct HelpView: View {
                   body: "在 platform.openai.com 開啟資料分享（Settings > Organization > Data controls > Sharing）並保留一點餘額，小模型每天約 250 萬 tokens 免費，每天練 1 小時約用 20～35 萬。gpt-4.1 屬大模型組（每天 25 萬），不建議。"),
             Topic(title: "會額外花錢的功能", icon: "dollarsign.circle",
                   body: "「OpenAI 語音」（朗讀）與「OpenAI 高準確度辨識」不在免費額度內。想完全免費就用 iPhone 內建語音與 iPhone 辨識。建議關閉 OpenAI 自動儲值。"),
+            Topic(title: "背景音樂", icon: "music.note",
+                  body: "設定 > 背景音樂：開啟後練習時播放 App 自己產生的輕音樂（不用網路、無版權問題）。「依情境自動」：自由對話 Lo-fi、工作英文專注、新聞節奏、機場飯店餐廳旅行輕快、跟讀平靜。輪到你說話時音樂自動轉小。可試聽、調音量。"),
             Topic(title: "語音更自然", icon: "speaker.wave.3",
                   body: "iOS 設定 > 輔助使用 > 語音內容 > 聲音 > 英文 / 中文，下載「進階（Premium）」語音，內建朗讀會自然很多。"),
         ]),
@@ -165,6 +169,7 @@ struct HelpView: View {
                 }
             }
             .searchable(text: $search, prompt: "搜尋用法，例如：翻譯、跟讀、429")
+            .themeBackground()
             .navigationTitle("使用說明")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { Button("完成") { dismiss() } }
