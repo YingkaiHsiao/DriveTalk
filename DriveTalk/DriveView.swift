@@ -8,20 +8,19 @@ struct DriveView: View {
     @State private var showHistory = false
     @State private var showTranscript = false
     @State private var showHelp = false
-    @State private var pulse = false
 
     private var active: Bool { engine.phase != .idle }
 
     var body: some View {
         NavigationStack {
-            ZStack {
-                AppBackground()
+            GeometryReader { geo in
+                ScrollView {
                 VStack(spacing: 18) {
                     header
-                    Spacer(minLength: 0)
+                    Spacer(minLength: 8)
                     statusOrb
                     captions
-                    Spacer(minLength: 0)
+                    Spacer(minLength: 8)
                     if let err = engine.errorText {
                         Label(err, systemImage: "exclamationmark.triangle.fill")
                             .font(.callout.weight(.semibold))
@@ -35,7 +34,12 @@ struct DriveView: View {
                 }
                 .padding(.horizontal, 20)
                 .padding(.vertical, 12)
+                // Fill the screen when there's room (Spacers work), scroll when there isn't (no overlap).
+                .frame(minHeight: geo.size.height)
+                }
+                .scrollBounceBehavior(.basedOnSize)
             }
+            .background(AppBackground())
             .navigationTitle("English Mate")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -116,37 +120,31 @@ struct DriveView: View {
     }
 
     private var statusOrb: some View {
-        VStack(spacing: 14) {
+        let big = active
+        let pulsing = engine.phase == .listening || engine.phase == .speaking || engine.phase == .thinking
+        return VStack(spacing: 12) {
             ZStack {
-                // Soft glow rings
-                Circle()
-                    .fill(orbColor.opacity(0.14))
-                    .frame(width: 200, height: 200)
-                    .scaleEffect(pulse ? 1.06 : 0.94)
-                Circle()
-                    .fill(orbColor.opacity(0.22))
-                    .frame(width: 160, height: 160)
-                    .scaleEffect(pulse ? 1.02 : 0.97)
-                // Core
+                // Soft glow rings — the "breathing" only scales, so the layout never moves.
+                PulseRing(color: orbColor.opacity(0.14), size: big ? 196 : 150, amount: 0.06,
+                          period: engine.phase == .listening ? 1.4 : 2.6, running: pulsing)
+                PulseRing(color: orbColor.opacity(0.22), size: big ? 158 : 120, amount: 0.03,
+                          period: engine.phase == .listening ? 1.4 : 2.6, running: pulsing)
                 Circle()
                     .fill(RadialGradient(colors: [orbColor.opacity(0.85), orbColor], center: .topLeading,
                                          startRadius: 10, endRadius: 120))
-                    .frame(width: 124, height: 124)
-                    .shadow(color: orbColor.opacity(0.55), radius: 22)
+                    .frame(width: big ? 124 : 96, height: big ? 124 : 96)
+                    .shadow(color: orbColor.opacity(0.5), radius: big ? 22 : 12)
                 Image(systemName: icon)
-                    .font(.system(size: 46, weight: .bold))
+                    .font(.system(size: big ? 46 : 38, weight: .bold))
                     .foregroundStyle(.white)
                     .symbolEffect(.variableColor.iterative, isActive: engine.phase == .speaking || engine.phase == .listening)
             }
-            .frame(height: 200)
-            .animation(.easeInOut(duration: engine.phase == .listening ? 0.8 : 1.6).repeatForever(autoreverses: true), value: pulse)
-            .animation(.easeInOut(duration: 0.35), value: engine.phase)
-            .onAppear { pulse = true }
+            .frame(width: 210, height: big ? 206 : 156)
+            .animation(.easeInOut(duration: 0.3), value: big)
 
             Text(engine.phase.label)
                 .font(.title2.weight(.bold))
                 .foregroundStyle(engine.phase == .idle ? Color.primary : orbColor)
-                .contentTransition(.opacity)
         }
     }
 
@@ -166,7 +164,7 @@ struct DriveView: View {
     private var captions: some View {
         let fallback = engine.messages.last(where: { $0.role == .assistant })?.text ?? ""
         let feedback = engine.messages.last(where: { $0.role == .user })?.feedback
-        if active || !fallback.isEmpty {
+        if active {
             VStack(spacing: 12) {
                 if let target = engine.shadowTarget, active {
                     // Shadowing: keep the sentence to repeat on screen; what you say appears below it.
@@ -273,6 +271,27 @@ struct DriveView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .themeCard(padding: 12)
+    }
+}
+
+/// A circle that gently scales in and out. Driven by TimelineView, so it can't drag the rest of
+/// the screen into the animation (which made the centre jump in and out at launch).
+private struct PulseRing: View {
+    let color: Color
+    let size: CGFloat
+    let amount: Double
+    let period: Double
+    let running: Bool
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !running)) { ctx in
+            let t = ctx.date.timeIntervalSinceReferenceDate
+            let scale = running ? 1 + amount * sin(t * 2 * .pi / period) : 1
+            Circle()
+                .fill(color)
+                .frame(width: size, height: size)
+                .scaleEffect(scale)
+        }
     }
 }
 
