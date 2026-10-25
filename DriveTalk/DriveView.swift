@@ -36,6 +36,8 @@ struct DriveView: View {
                 .padding(.vertical, 12)
                 // Fill the screen when there's room (Spacers work), scroll when there isn't (no overlap).
                 .frame(minHeight: geo.size.height)
+                // No implicit animations on this screen: nothing slides / flies in or out.
+                .transaction { $0.animation = nil }
                 }
                 .scrollBounceBehavior(.basedOnSize)
             }
@@ -140,7 +142,6 @@ struct DriveView: View {
                     .symbolEffect(.variableColor.iterative, isActive: engine.phase == .speaking || engine.phase == .listening)
             }
             .frame(width: 210, height: big ? 206 : 156)
-            .animation(.easeInOut(duration: 0.3), value: big)
 
             Text(engine.phase.label)
                 .font(.title2.weight(.bold))
@@ -202,7 +203,6 @@ struct DriveView: View {
             }
             .frame(maxWidth: .infinity, minHeight: 110)
             .themeCard()
-            .animation(.easeInOut(duration: 0.25), value: fallback)
         }
     }
 
